@@ -1,0 +1,20 @@
+﻿# Ignora tutto tranne metriche_librerie
+/*
+!/metriche_librerie/
+!.gitignore
+!/README.md
+
+# Ignora cartella di build e file generati
+metriche_librerie/build/
+metriche_librerie/**/build/
+metriche_librerie/**/.cache/
+metriche_librerie/**/.vscode/
+metriche_librerie/**/.idea/
+metriche_librerie/**/*.o
+metriche_librerie/**/*.obj
+metriche_librerie/**/*.a
+metriche_librerie/**/*.lib
+metriche_librerie/**/*.so
+metriche_librerie/**/*.dylib
+metriche_librerie/**/*.dll
+metriche_librerie/**/*.exe

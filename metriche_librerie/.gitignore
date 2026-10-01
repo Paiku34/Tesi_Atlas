@@ -1,0 +1,10 @@
+build/
+*.o
+*.obj
+*.exe
+*.out
+*.a
+*.so
+*.dylib
+.cache/
+.vscode/
