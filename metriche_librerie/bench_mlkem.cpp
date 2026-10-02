@@ -52,6 +52,8 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
     #endif
     for (int i = 0; i < ITERATIONS; i++) {
         OQS_KEM_keypair(kem, public_key.data(), secret_key.data());
+        do_not_optimize_away(public_key);
+        do_not_optimize_away(secret_key);
     }
     #ifdef COMPILER_IS_X86
     unsigned long long c1 = __rdtscp(&aux);
@@ -71,6 +73,7 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
     for (int i = 0; i < ITERATIONS; i++) {
         OQS_KEM_encaps(kem, ciphertext.data(), shared_secret_sender.data(), public_key.data());
         do_not_optimize_away(ciphertext);
+        do_not_optimize_away(shared_secret_sender);
     }
     #ifdef COMPILER_IS_X86
     c1 = __rdtscp(&aux);
@@ -101,6 +104,7 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
     for (int i = 0; i < ITERATIONS; i++) {
         OQS_KEM_decaps(kem, shared_secret_receiver.data(),
                        ciphertext.data(), secret_key.data());
+        do_not_optimize_away(shared_secret_receiver);
     }
     #ifdef COMPILER_IS_X86
     c1 = __rdtscp(&aux);
