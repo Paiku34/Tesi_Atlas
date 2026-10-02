@@ -28,7 +28,9 @@ target_include_directories(bench_ascon PRIVATE ${ASCON_DIR} ${ASCON_TESTS_DIR})
 # 2. LIBSODIUM
 # ---------------------------------------------------------
 find_library(SODIUM_LIB NAMES sodium REQUIRED)
+find_path(SODIUM_INCLUDE_DIR NAMES sodium.h PATHS /usr/local/include /usr/include /opt/homebrew/include)
 add_executable(bench_libsodium bench_libsodium.cpp)
+target_include_directories(bench_libsodium PRIVATE ${SODIUM_INCLUDE_DIR})
 target_link_libraries(bench_libsodium PRIVATE ${SODIUM_LIB})
 
 # ---------------------------------------------------------
@@ -42,11 +44,11 @@ target_link_libraries(bench_openssl PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 # ---------------------------------------------------------
 # 4. ML-KEM POST-QUANTUM (liboqs)
 # ---------------------------------------------------------
-find_library(OQS_LIB NAMES oqs PATHS /usr/local/lib /usr/lib)
+find_library(OQS_LIB NAMES oqs PATHS /usr/local/lib /usr/lib /opt/homebrew/lib)
 if (OQS_LIB)
     message(STATUS "Trovata liboqs: ${OQS_LIB}")
     add_executable(bench_mlkem bench_mlkem.cpp)
-    target_include_directories(bench_mlkem PRIVATE /usr/local/include)
+    target_include_directories(bench_mlkem PRIVATE /usr/local/include /opt/homebrew/include)
     target_link_libraries(bench_mlkem PRIVATE ${OQS_LIB} OpenSSL::Crypto)
 else()
     message(WARNING "liboqs non trovata. Esegui la compilazione di liboqs per abilitare bench_mlkem.")
