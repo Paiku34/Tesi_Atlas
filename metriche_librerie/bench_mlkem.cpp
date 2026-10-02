@@ -8,18 +8,18 @@ struct KemBenchmarkResult {
     size_t total_exchanged_bytes;
     int num_anep96_frames;
     
-    double keygen_us;
-    unsigned long long keygen_cycles;
+    double keygen_us = 0.0;
+    unsigned long long keygen_cycles = 0;
     
-    double encaps_us;
-    unsigned long long encaps_cycles;
+    double encaps_us = 0.0;
+    unsigned long long encaps_cycles = 0;
     
-    double decaps_us;
-    unsigned long long decaps_cycles;
+    double decaps_us = 0.0;
+    unsigned long long decaps_cycles = 0;
 
-    std::string energy_encaps_uj_str;
-    std::string energy_decaps_uj_str;
-    long ram_kb;
+    std::string energy_encaps_uj_str = "N/A";
+    std::string energy_decaps_uj_str = "N/A";
+    long ram_kb = 0;
 };
 
 void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
@@ -63,7 +63,6 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
     res.keygen_us = std::chrono::duration<double, std::micro>(t1 - t0).count() / ITERATIONS;
 
     // ENCAPSULATION
-    res.energy_encaps_uj_str = "N/A";
     long long energy_start = read_intel_rapl_uj();
 
     t0 = std::chrono::high_resolution_clock::now();
@@ -85,7 +84,6 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
 
     res.encaps_us = std::chrono::duration<double, std::micro>(t1 - t0).count() / ITERATIONS;
 
-    res.energy_encaps_uj_str = "N/A";
     if (energy_start != -1 && energy_end >= energy_start) {
         double real_energy_uj = (double)(energy_end - energy_start) / ITERATIONS;
         std::stringstream ss;
@@ -94,7 +92,6 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
     }
 
     // DECAPSULATION
-    res.energy_decaps_uj_str = "N/A";
     long long energy_decaps_start = read_intel_rapl_uj();
 
     t0 = std::chrono::high_resolution_clock::now();
