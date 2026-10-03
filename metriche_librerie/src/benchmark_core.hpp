@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <sstream>
+#include <fstream>
 
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -53,6 +54,33 @@ inline void do_not_optimize_away(const std::vector<uint8_t>& vec) {
     asm volatile("" : : "r"(vec.data()) : "memory");
 }
 
+inline std::string get_data_dir() {
+    if (access("data", F_OK) == 0) return "data/";
+    if (access("../data", F_OK) == 0) return "../data/";
+    return "./";
+}
+
+inline void append_bulk_sample_to_csv(const std::string& algo_name, size_t size, size_t added_bytes, 
+                                      int sample_id, double latency_us, unsigned long long cycles_per_op, 
+                                      double cycles_per_byte, double energy_uj, long ram_kb) {
+    std::string csv_path = get_data_dir() + "bulk_encryption_raw.csv";
+    std::ofstream csv(csv_path, std::ios::app);
+    if (!csv.is_open()) return;
+    csv.seekp(0, std::ios::end);
+    if (csv.tellp() == 0) {
+        csv << "algorithm,payload_bytes,added_bytes,sample_id,latency_us,cycles_per_op,cycles_per_byte,energy_uj,ram_kb\n";
+    }
+    csv << "\"" << algo_name << "\","
+        << size << ","
+        << added_bytes << ","
+        << sample_id << ","
+        << std::fixed << std::setprecision(4) << latency_us << ","
+        << cycles_per_op << ","
+        << std::fixed << std::setprecision(2) << cycles_per_byte << ","
+        << std::fixed << std::setprecision(3) << energy_uj << ","
+        << ram_kb << "\n";
+}
+
 inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t>& packet_sizes) {
     std::cout << "\n======================================================================================================\n";
     std::cout << " ALGORITMO: " << algo->get_name() << "\n";
@@ -67,7 +95,7 @@ inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t
               << "| " << std::setw(10) << "Payload" 
               << "| " << std::setw(10) << "Overhead" 
               << "| " << std::setw(12) << "Time (us)" 
-              << "| " << std::setw(12) << "Cycles/Op"
+              << "| " << std::setw(12) << "Cycles/Op" 
               << "| " << std::setw(12) << "Cycles/Byte"
               << "| " << std::setw(14) << "Energy (uJ)"
               << "|\n";
@@ -90,18 +118,24 @@ inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t
         #ifdef COMPILER_IS_X86
         unsigned int aux;
         unsigned long long start_cycles = __rdtscp(&aux);
-        #else
-        unsigned long long start_cycles = 0;
         #endif
 
         if (rapl_available) {
             energy_start = read_intel_rapl_uj();
         }
 
-        const int MEASUREMENT_ITERATIONS = 2000;
+        const int MEASUREMENT_ITERATIONS = 5000;
+        std::vector<double> sample_latencies;
+        sample_latencies.reserve(MEASUREMENT_ITERATIONS);
+
         for (int i = 0; i < MEASUREMENT_ITERATIONS; i++) {
+            auto s_start = std::chrono::high_resolution_clock::now();
             algo->process(payload, ciphertext);
             do_not_optimize_away(ciphertext);
+            auto s_end = std::chrono::high_resolution_clock::now();
+
+            double s_us = std::chrono::duration<double, std::micro>(s_end - s_start).count();
+            sample_latencies.push_back(s_us);
         }
 
         if (rapl_available) {
@@ -122,11 +156,12 @@ inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t
         double cycles_per_byte = (size > 0) ? ((double)total_cycles / size) : 0.0;
         size_t added_bytes = ciphertext.size() - payload.size();
 
+        double energy_val = -1.0;
         std::string energy_str = "N/A";
         if (rapl_available && energy_end >= energy_start) {
-            double real_energy_uj = (double)(energy_end - energy_start) / MEASUREMENT_ITERATIONS;
+            energy_val = (double)(energy_end - energy_start) / MEASUREMENT_ITERATIONS;
             std::stringstream ss;
-            ss << std::fixed << std::setprecision(2) << real_energy_uj;
+            ss << std::fixed << std::setprecision(2) << energy_val;
             energy_str = ss.str();
         }
 
@@ -138,6 +173,13 @@ inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t
                   << "| " << std::setw(12) << cycles_per_byte
                   << "| " << std::setw(14) << energy_str
                   << "|\n";
+
+        long current_ram = get_current_ram_usage_kb();
+
+        for (size_t s = 0; s < sample_latencies.size(); s++) {
+            append_bulk_sample_to_csv(algo->get_name(), size, added_bytes, (int)(s + 1), 
+                                      sample_latencies[s], total_cycles, cycles_per_byte, energy_val, current_ram);
+        }
     }
 
     long ram_used = get_current_ram_usage_kb();

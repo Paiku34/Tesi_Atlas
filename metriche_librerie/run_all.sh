@@ -1,86 +1,114 @@
 #!/bin/bash
 
+# Determine directory of this script and move to it
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+cd "$SCRIPT_DIR"
+
 echo "=========================================================================="
 echo " ZENO ATLAS - CRYPTO BENCHMARK SUITE"
-echo " Tesi Magistrale: Crittografia per Telemetria Sonobuoy Sicura"
+echo " Tesi Magistrale: Crittografia per Telemetria Sonobuoy Sicura (NATO ANEP-96)"
 echo "=========================================================================="
 echo ""
 
+# Assicura la presenza delle cartelle organizzate
+mkdir -p data plots build
+
 # =========================================================================
-# FASE 0: SETUP CPU & RAPL (richiede root)
+# FASE 0: SETUP CPU & AMBIENTE
 # =========================================================================
 echo "--- [FASE 0] Verifica Ambiente di Esecuzione ---"
 
-# Mostra info CPU
-echo "CPU: $(cat /proc/cpuinfo | grep 'model name' | head -1 | cut -d: -f2 | xargs)"
-echo "Cores: $(nproc)"
+if [ -f /proc/cpuinfo ]; then
+    echo "CPU: $(cat /proc/cpuinfo | grep 'model name' | head -1 | cut -d: -f2 | xargs)"
+    echo "Cores: $(nproc 2>/dev/null || echo 'N/A')"
+elif command -v sysctl &> /dev/null; then
+    echo "CPU: $(sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m)"
+fi
 echo "Hostname: $(hostname)"
 echo ""
 
-# Verifica se siamo root (necessario per RAPL e cpufreq)
-if [ "$(id -u)" -ne 0 ]; then
+# Verifica privilegi di root (solo per Linux con RAPL e cpufreq)
+if [ "$(id -u)" -ne 0 ] && [ -f /proc/cpuinfo ]; then
     echo "[WARNING] Non stai eseguendo come root!"
-    echo "          Per misure affidabili esegui: sudo ./run_all.sh"
-    echo "          - RAPL potrebbe essere bloccato"
-    echo "          - La frequenza CPU potrebbe non essere fissata"
-    echo ""
+    echo "          Per misure energetiche RAPL e fissaggio frequenza esegui: sudo ./run_all.sh"
 fi
 
-# Fissa la frequenza CPU a performance (disabilita scaling dinamico)
+# Fissa la frequenza CPU a performance (se cpupower è disponibile su Linux)
 if command -v cpupower &> /dev/null; then
-    echo "--- Fissaggio frequenza CPU a 'performance' (niente turbo/throttle) ---"
+    echo "--- Fissaggio frequenza CPU a 'performance' ---"
     cpupower frequency-set -g performance 2>/dev/null
-    # Disabilita turbo boost Intel
     if [ -f /sys/devices/system/cpu/intel_pstate/no_turbo ]; then
         echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null
         echo "[OK] Intel Turbo Boost disabilitato"
     fi
     echo "[OK] Governor impostato a 'performance'"
-    cpupower frequency-info 2>/dev/null | grep "current CPU frequency"
-else
-    echo "[WARNING] cpupower non trovato. Installa con: sudo apt install linux-tools-common linux-tools-$(uname -r)"
-    echo "          Senza cpupower la frequenza CPU potrebbe variare durante il benchmark!"
 fi
-echo ""
 
-# Verifica accesso RAPL
+# Sensore RAPL
 if [ -f /sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj ]; then
-    echo "[OK] Sensore Intel RAPL accessibile - misure energetiche disponibili"
+    echo "[OK] Sensore Intel RAPL accessibile"
+fi
+echo ""
+
+# =========================================================================
+# FASE 1: BUILD DEI BINARI CON CMAKE
+# =========================================================================
+echo "=========================================================================="
+echo " 1. COMPILAZIONE BINARI OTTIMIZZATI (-O3) IN build/"
+echo "=========================================================================="
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+
+if [ $? -ne 0 ]; then
+    echo "[ERRORE] Compilazione fallita!"
+    exit 1
+fi
+
+echo ""
+echo "=========================================================================="
+echo " 2. CODE SIZE & BINARY FOOTPRINT (Flash/ROM Memory Footprint)"
+echo "=========================================================================="
+size build/bench_ascon build/bench_libsodium build/bench_openssl build/bench_key_management build/bench_mlkem 2>/dev/null
+
+# =========================================================================
+# FASE 2: ESECUZIONE BENCHMARK ISOLATI
+# =========================================================================
+echo ""
+echo "=========================================================================="
+echo " 3. ESECUZIONE BENCHMARK ISOLATI (Misure 1-a-1 salvate in data/)"
+echo "=========================================================================="
+
+# Resetta i CSV dei dati grezzi per nuova run pulita
+rm -f data/bulk_encryption_raw.csv data/key_management_raw.csv
+
+./build/bench_ascon
+./build/bench_libsodium
+./build/bench_openssl
+
+if [ -f "./build/bench_key_management" ]; then
+    ./build/bench_key_management
+fi
+
+if [ -f "./build/bench_mlkem" ]; then
+    ./build/bench_mlkem
+fi
+
+# =========================================================================
+# FASE 3: ANALISI STATISTICA (CI 95%) & GENERAZIONE GRAFICI TESI
+# =========================================================================
+echo ""
+echo "=========================================================================="
+echo " 4. ELABORAZIONE STATISTICA & GRAFICI TESI (python/analyze_benchmarks.py)"
+echo "=========================================================================="
+if command -v python3 &> /dev/null; then
+    python3 python/analyze_benchmarks.py
 else
-    echo "[WARNING] Sensore Intel RAPL non accessibile"
-    echo "          Prova: sudo chmod 444 /sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
-fi
-echo ""
-
-# =========================================================================
-# FASE 1: CODE SIZE & BINARY FOOTPRINT
-# =========================================================================
-echo "=========================================================================="
-echo " 1. CODE SIZE & BINARY FOOTPRINT COMPARISON (size command)"
-echo "    (Misura lo spazio reale in Flash/ROM del codice macchina compilato)"
-echo "=========================================================================="
-echo "--- Ascon-c (opt64 aead.c.o) ---"
-size CMakeFiles/bench_ascon.dir/ascon-c/crypto_aead/asconaead128/opt64/aead.c.o 2>/dev/null
-
-echo ""
-echo "--- Eseguibili Completi (ELF Flash Footprint) ---"
-size bench_ascon bench_libsodium bench_openssl bench_mlkem 2>/dev/null
-
-# =========================================================================
-# FASE 2: BENCHMARK ISOLATI (ogni algoritmo in processo fork separato)
-# =========================================================================
-echo ""
-echo "=========================================================================="
-echo " 2. ESECUZIONE BENCHMARK ISOLATI (fork-based RSS isolation)"
-echo "=========================================================================="
-./bench_ascon
-./bench_libsodium
-./bench_openssl
-if [ -f "./bench_mlkem" ]; then
-    ./bench_mlkem
+    echo "[ERRORE] Python 3 non trovato. Installa python3 con scipy, pandas e matplotlib."
 fi
 
 echo ""
 echo "=========================================================================="
-echo " BENCHMARK COMPLETATO"
+echo " COMPLETATO CON SUCCESSO!"
+echo " - Dati grezzi e tabelle: data/"
+echo " - Grafici scientifici:   plots/"
 echo "=========================================================================="

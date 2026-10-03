@@ -1,20 +1,34 @@
-﻿# Ignora tutto tranne metriche_librerie
+# Ignora tutto nella root tranne metriche_librerie e file di documentazione
 /*
 !/metriche_librerie/
 !.gitignore
 !/README.md
 
-# Ignora cartella di build e file generati
+# Cartelle generate automaticamente dai benchmark e dalla build
 metriche_librerie/build/
-metriche_librerie/**/build/
-metriche_librerie/**/.cache/
-metriche_librerie/**/.vscode/
-metriche_librerie/**/.idea/
-metriche_librerie/**/*.o
-metriche_librerie/**/*.obj
-metriche_librerie/**/*.a
-metriche_librerie/**/*.lib
-metriche_librerie/**/*.so
-metriche_librerie/**/*.dylib
-metriche_librerie/**/*.dll
-metriche_librerie/**/*.exe
+metriche_librerie/data/
+metriche_librerie/plots/
+**/build/
+**/.cache/
+
+# File oggetto, librerie statiche e dinamiche, eseguibili
+**/*.o
+**/*.obj
+**/*.a
+**/*.lib
+**/*.so
+**/*.dylib
+**/*.dll
+**/*.exe
+**/*.out
+
+# File temporanei di sistema e IDE
+.DS_Store
+**/.DS_Store
+.vscode/
+**/.vscode/
+.idea/
+**/.idea/
+__pycache__/
+**/__pycache__/
+*.pyc

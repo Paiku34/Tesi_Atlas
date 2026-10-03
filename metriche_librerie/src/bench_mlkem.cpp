@@ -1,5 +1,6 @@
 #include "benchmark_core.hpp"
 #include <oqs/oqs.h>
+#include <fstream>
 
 struct KemBenchmarkResult {
     std::string alg_name;
@@ -19,7 +20,10 @@ struct KemBenchmarkResult {
 
     std::string energy_encaps_uj_str = "N/A";
     std::string energy_decaps_uj_str = "N/A";
+    double total_energy_uj = -1.0;
     long ram_kb = 0;
+
+    std::vector<double> sample_times_us;
 };
 
 void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
@@ -84,10 +88,11 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
 
     res.encaps_us = std::chrono::duration<double, std::micro>(t1 - t0).count() / ITERATIONS;
 
+    double e_enc = -1.0;
     if (energy_start != -1 && energy_end >= energy_start) {
-        double real_energy_uj = (double)(energy_end - energy_start) / ITERATIONS;
+        e_enc = (double)(energy_end - energy_start) / ITERATIONS;
         std::stringstream ss;
-        ss << std::fixed << std::setprecision(2) << real_energy_uj;
+        ss << std::fixed << std::setprecision(2) << e_enc;
         res.energy_encaps_uj_str = ss.str();
     }
 
@@ -113,16 +118,55 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
 
     res.decaps_us = std::chrono::duration<double, std::micro>(t1 - t0).count() / ITERATIONS;
 
+    double e_dec = -1.0;
     if (energy_decaps_start != -1 && energy_decaps_end >= energy_decaps_start) {
-        double real_energy_uj = (double)(energy_decaps_end - energy_decaps_start) / ITERATIONS;
+        e_dec = (double)(energy_decaps_end - energy_decaps_start) / ITERATIONS;
         std::stringstream ss;
-        ss << std::fixed << std::setprecision(2) << real_energy_uj;
+        ss << std::fixed << std::setprecision(2) << e_dec;
         res.energy_decaps_uj_str = ss.str();
+    }
+
+    if (e_enc >= 0 && e_dec >= 0) {
+        res.total_energy_uj = e_enc + e_dec;
+    }
+
+    res.sample_times_us.clear();
+    res.sample_times_us.reserve(ITERATIONS);
+    for (int i = 0; i < ITERATIONS; i++) {
+        auto sb_t0 = std::chrono::high_resolution_clock::now();
+        OQS_KEM_encaps(kem, ciphertext.data(), shared_secret_sender.data(), public_key.data());
+        do_not_optimize_away(ciphertext);
+        OQS_KEM_decaps(kem, shared_secret_receiver.data(), ciphertext.data(), secret_key.data());
+        do_not_optimize_away(shared_secret_receiver);
+        auto sb_t1 = std::chrono::high_resolution_clock::now();
+        double sample_us = std::chrono::duration<double, std::micro>(sb_t1 - sb_t0).count();
+        res.sample_times_us.push_back(sample_us);
     }
 
     res.ram_kb = get_current_ram_usage_kb();
 
     OQS_KEM_free(kem);
+}
+
+void append_mlkem_samples_to_csv(const std::string& filename, const KemBenchmarkResult& res) {
+    std::ofstream file(filename, std::ios::app);
+    if (!file.is_open()) return;
+    file.seekp(0, std::ios::end);
+    if (file.tellp() == 0) {
+        file << "category,scheme,paradigm,exchanged_bytes,anep_frames,sample_id,latency_us,cycles,energy_uj,ram_kb\n";
+    }
+    for (size_t i = 0; i < res.sample_times_us.size(); i++) {
+        file << "key_management,"
+             << "\"" << res.alg_name << "\","
+             << "\"Lattice (PQC)\","
+             << res.total_exchanged_bytes << ","
+             << res.num_anep96_frames << ","
+             << i + 1 << ","
+             << std::fixed << std::setprecision(4) << res.sample_times_us[i] << ","
+             << (res.encaps_cycles + res.decaps_cycles) << ","
+             << std::fixed << std::setprecision(3) << res.total_energy_uj << ","
+             << res.ram_kb << "\n";
+    }
 }
 
 int main() {
@@ -162,6 +206,8 @@ int main() {
               << "|" << std::string(10, '-')
               << "|\n";
 
+    std::string csv_file = get_data_dir() + "key_management_raw.csv";
+
     for (const char* alg : algorithms) {
         std::cout.flush();
         pid_t pid = fork();
@@ -186,6 +232,7 @@ int main() {
                       << "| " << std::setw(8)  << res.ram_kb
                       << "|\n";
             std::cout.flush();
+            append_mlkem_samples_to_csv(csv_file, res);
             _exit(0);
         } else if (pid > 0) {
             int status;
