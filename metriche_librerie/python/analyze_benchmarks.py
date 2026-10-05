@@ -334,7 +334,7 @@ def analyze_key_management():
             data_to_plot.append(sub['latency_us'].values)
             labels.append(s)
 
-    box = ax.boxplot(data_to_plot, patch_artist=True, tick_labels=labels, showmeans=True, showfliers=False)
+    box = ax.boxplot(data_to_plot, patch_artist=True, labels=labels, showmeans=True, showfliers=False)
     for patch in box['boxes']:
         patch.set_facecolor('#ecf0f1')
         patch.set_edgecolor('#2c3e50')
