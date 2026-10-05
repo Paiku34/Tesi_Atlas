@@ -153,14 +153,13 @@ void append_mlkem_to_csvs(const std::string& general_csv,
         if (gf.is_open()) {
             gf.seekp(0, std::ios::end);
             if (gf.tellp() == 0) {
-                gf << "category,scheme,paradigm,exchanged_bytes,anep_frames,sample_id,latency_us,cycles,energy_uj,ram_kb\n";
+                gf << "category,scheme,paradigm,exchanged_bytes,sample_id,latency_us,cycles,energy_uj,ram_kb\n";
             }
             for (size_t i = 0; i < res.handshake.sample_times_us.size(); i++) {
                 gf << "key_management,"
                    << "\"" << res.alg_name << "\","
                    << "\"Lattice (PQC)\","
                    << res.total_exchanged_bytes << ","
-                   << 0 << "," // anep_frames omesso / non vincolato a 255 B
                    << i + 1 << ","
                    << std::fixed << std::setprecision(4) << res.handshake.sample_times_us[i] << ","
                    << res.handshake.cycles << ","

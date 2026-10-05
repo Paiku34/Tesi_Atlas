@@ -10,7 +10,6 @@ struct KeyMgmtResult {
     std::string scheme_name;
     std::string paradigm;
     size_t exchanged_bytes;
-    int anep_frames;
     
     double keygen_us = 0.0;
     unsigned long long keygen_cycles = 0;
@@ -35,7 +34,6 @@ void benchmark_psk_kdf_libsodium(KeyMgmtResult& res, int iterations) {
     res.scheme_name = "PSK + KDF (Libsodium)";
     res.paradigm = "Symmetric Pre-Shared";
     res.exchanged_bytes = 32; // 32 B salt/nonce
-    res.anep_frames = 1;
 
     uint8_t psk[crypto_kdf_KEYBYTES];
     randombytes_buf(psk, sizeof(psk));
@@ -97,7 +95,6 @@ void benchmark_psk_hkdf_openssl(KeyMgmtResult& res, int iterations) {
     res.scheme_name = "PSK + HKDF (OpenSSL)";
     res.paradigm = "Symmetric Pre-Shared";
     res.exchanged_bytes = 32; // 32 B salt/nonce
-    res.anep_frames = 1;
 
     uint8_t psk[32];
     RAND_bytes(psk, sizeof(psk));
@@ -182,7 +179,6 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
     res.scheme_name = "Symmetric Handshake";
     res.paradigm = "Symmetric 2-Way Auth";
     res.exchanged_bytes = 80;
-    res.anep_frames = 1;
 
     uint8_t psk[32];
     randombytes_buf(psk, sizeof(psk));
@@ -255,7 +251,6 @@ void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
     res.scheme_name = "ECDH X25519 (Libsodium)";
     res.paradigm = "Classical (ECC)";
     res.exchanged_bytes = 64;
-    res.anep_frames = 1;
 
     uint8_t client_sk[crypto_scalarmult_SCALARBYTES];
     uint8_t client_pk[crypto_scalarmult_BYTES];
@@ -322,7 +317,6 @@ void benchmark_x25519_openssl(KeyMgmtResult& res, int iterations) {
     res.scheme_name = "ECDH X25519 (OpenSSL)";
     res.paradigm = "Classical (ECC)";
     res.exchanged_bytes = 64; // 32B + 32B
-    res.anep_frames = 1;
 
     // Warm-up
     for (int i = 0; i < 20; i++) {
@@ -402,7 +396,6 @@ void append_samples_to_csv(const std::string& filename, const KeyMgmtResult& res
              << "\"" << res.scheme_name << "\","
              << "\"" << res.paradigm << "\","
              << res.exchanged_bytes << ","
-             << res.anep_frames << ","
              << i + 1 << ","
              << std::fixed << std::setprecision(4) << res.sample_times_us[i] << ","
              << res.total_cycles << ","
@@ -426,7 +419,7 @@ int main() {
     {
         // Sovrascrivi/Inizializza CSV con intestazione
         std::ofstream file(csv_file);
-        file << "category,scheme,paradigm,exchanged_bytes,anep_frames,sample_id,latency_us,cycles,energy_uj,ram_kb\n";
+        file << "category,scheme,paradigm,exchanged_bytes,sample_id,latency_us,cycles,energy_uj,ram_kb\n";
     }
 
     std::cout << std::left 

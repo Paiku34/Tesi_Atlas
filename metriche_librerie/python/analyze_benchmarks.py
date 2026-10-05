@@ -259,7 +259,6 @@ def analyze_key_management():
         latencies = group['latency_us'].values
         mean_us, median_us, std_us, ci95, valid_n = compute_ci95(latencies)
         exchanged = int(group['exchanged_bytes'].iloc[0])
-        frames = int(group['anep_frames'].iloc[0])
         paradigm = group['paradigm'].iloc[0]
         ram_kb = int(group['ram_kb'].iloc[0])
         cycles = int(group['cycles'].iloc[0]) if has_cycles else 0
@@ -277,7 +276,6 @@ def analyze_key_management():
             'Scheme': scheme,
             'Paradigm': paradigm,
             'Exchanged (B)': exchanged,
-            'ANEP Frames': frames,
             'Mean Latency (us)': round(mean_us, 3),
             'Median Latency (us)': round(median_us, 3),
             'StdDev (us)': round(std_us, 3),
