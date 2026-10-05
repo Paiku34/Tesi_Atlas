@@ -10,12 +10,6 @@ struct KeyMgmtResult {
     std::string paradigm;
     size_t exchanged_bytes = 0;
     
-    double keygen_us = 0.0;
-    unsigned long long keygen_cycles = 0;
-    
-    double derive_us = 0.0;
-    unsigned long long derive_cycles = 0;
-    
     double total_us = 0.0;
     unsigned long long total_cycles = 0;
     
@@ -68,8 +62,7 @@ void benchmark_psk_kdf_libsodium(KeyMgmtResult& res, int iterations) {
 
     #ifdef COMPILER_IS_X86
     unsigned long long c1 = __rdtscp(&aux);
-    res.derive_cycles = (c1 - c0) / iterations;
-    res.total_cycles = res.derive_cycles;
+    res.total_cycles = (c1 - c0) / iterations;
     #endif
 
     long long energy_end = read_intel_rapl_uj();
@@ -79,8 +72,7 @@ void benchmark_psk_kdf_libsodium(KeyMgmtResult& res, int iterations) {
 
     double sum = 0.0;
     for (double v : res.sample_times_us) sum += v;
-    res.derive_us = sum / iterations;
-    res.total_us = res.derive_us;
+    res.total_us = sum / iterations;
     res.ram_kb = get_current_ram_usage_kb();
 }
 
@@ -151,7 +143,6 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
     #ifdef COMPILER_IS_X86
     unsigned long long c1 = __rdtscp(&aux);
     res.total_cycles = (c1 - c0) / iterations;
-    res.derive_cycles = res.total_cycles;
     #endif
 
     long long energy_end = read_intel_rapl_uj();
@@ -162,7 +153,6 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
     double sum = 0.0;
     for (double v : res.sample_times_us) sum += v;
     res.total_us = sum / iterations;
-    res.derive_us = res.total_us;
     res.ram_kb = get_current_ram_usage_kb();
 }
 
