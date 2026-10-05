@@ -58,5 +58,5 @@ endif()
 # 5. KEY MANAGEMENT ROADMAP (PSK, Symmetric, ECC X25519)
 # ---------------------------------------------------------
 add_executable(bench_key_management src/bench_key_management.cpp)
-target_include_directories(bench_key_management PRIVATE ${SODIUM_INCLUDE_DIR} ${OPENSSL_INCLUDE_DIR})
-target_link_libraries(bench_key_management PRIVATE ${SODIUM_LIB} OpenSSL::Crypto)
+target_include_directories(bench_key_management PRIVATE ${SODIUM_INCLUDE_DIR})
+target_link_libraries(bench_key_management PRIVATE ${SODIUM_LIB})

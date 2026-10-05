@@ -244,10 +244,8 @@ def analyze_key_management():
     results = []
     order = [
         "PSK + KDF (Libsodium)",
-        "PSK + HKDF (OpenSSL)",
         "Symmetric Handshake",
         "ECDH X25519 (Libsodium)",
-        "ECDH X25519 (OpenSSL)",
         "ML-KEM-512",
         "ML-KEM-768",
         "ML-KEM-1024"
