@@ -1,7 +1,9 @@
 #include "benchmark_core.hpp"
 #include <sodium.h>
+#include <sodium/crypto_kdf_hkdf_sha256.h>
 #include <fstream>
 #include <iomanip>
+#include <cstring>
 
 struct KeyMgmtResult {
     std::string scheme_name;
@@ -32,14 +34,14 @@ void benchmark_psk_kdf_libsodium(KeyMgmtResult& res, int iterations) {
     res.paradigm = "Symmetric Pre-Shared";
     res.exchanged_bytes = 0; // 0 B (chiave pre-condivisa, derivazione locale su contatore di pacchetto)
 
-    uint8_t psk[crypto_kdf_KEYBYTES];
+    uint8_t psk[crypto_kdf_KEYBYTES]; // 32 B
     randombytes_buf(psk, sizeof(psk));
     uint8_t session_key[32];
 
     // Warm-up
     for (int i = 0; i < 50; i++) {
         crypto_kdf_derive_from_key(session_key, sizeof(session_key), (uint64_t)i, "ATLAS_KM", psk);
-        asm volatile("" : : "r"(session_key) : "memory");
+        do_not_optimize_away(session_key);
     }
 
     res.sample_times_us.clear();
@@ -57,7 +59,7 @@ void benchmark_psk_kdf_libsodium(KeyMgmtResult& res, int iterations) {
         
         auto t0 = std::chrono::high_resolution_clock::now();
         crypto_kdf_derive_from_key(session_key, sizeof(session_key), subkey_id, "ATLAS_KM", psk);
-        asm volatile("" : : "r"(session_key) : "memory");
+        do_not_optimize_away(session_key);
         auto t1 = std::chrono::high_resolution_clock::now();
 
         double s_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
@@ -93,16 +95,21 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
     uint8_t psk[32];
     randombytes_buf(psk, sizeof(psk));
     uint8_t nc[32], ns[32], tag[16], session_key[32];
+    uint8_t handshake_data[64];
+    uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
 
     // Warm-up
     for (int i = 0; i < 50; i++) {
         randombytes_buf(nc, sizeof(nc));
         randombytes_buf(ns, sizeof(ns));
-        crypto_auth(tag, nc, sizeof(nc), psk);
-        if (crypto_auth_verify(tag, nc, sizeof(nc), psk) == 0) {
-            crypto_kdf_derive_from_key(session_key, sizeof(session_key), 1, "ATLAS_SH", psk);
+        memcpy(handshake_data, nc, 32);
+        memcpy(handshake_data + 32, ns, 32);
+        crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
+        if (crypto_auth_verify(tag, handshake_data, sizeof(handshake_data), psk) == 0) {
+            crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
+            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
         }
-        asm volatile("" : : "r"(session_key) : "memory");
+        do_not_optimize_away(session_key);
     }
 
     res.sample_times_us.clear();
@@ -117,19 +124,24 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         auto t0 = std::chrono::high_resolution_clock::now();
-        // 1. Client genera Nonce client
+        // 1. Client genera Nonce client (32 B)
         randombytes_buf(nc, sizeof(nc));
         
-        // 2. Server genera Nonce server e calcola Tag su nc
+        // 2. Server genera Nonce server (32 B) e concatena i due nonce
         randombytes_buf(ns, sizeof(ns));
-        crypto_auth(tag, nc, sizeof(nc), psk);
+        memcpy(handshake_data, nc, 32);
+        memcpy(handshake_data + 32, ns, 32);
+
+        // 3. Server calcola Tag MAC su (nc || ns) con la Master Key
+        crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
         
-        // 3. Client verifica Tag
-        if (crypto_auth_verify(tag, nc, sizeof(nc), psk) == 0) {
-            // 4. Entrambi derivano chiave di sessione
-            crypto_kdf_derive_from_key(session_key, sizeof(session_key), 1, "ATLAS_SH", psk);
+        // 4. Client verifica Tag su (nc || ns)
+        if (crypto_auth_verify(tag, handshake_data, sizeof(handshake_data), psk) == 0) {
+            // 5. Entrambi derivano la chiave di sessione a 256 bit tramite HKDF (RFC 5869 - HMAC-SHA256)
+            crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
+            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
         }
-        asm volatile("" : : "r"(session_key) : "memory");
+        do_not_optimize_away(session_key);
         auto t1 = std::chrono::high_resolution_clock::now();
 
         double s_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
@@ -196,7 +208,7 @@ void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
 
         // Derivazione segreto condiviso (lato Client)
         if (crypto_scalarmult(shared_secret, client_sk, server_pk) == 0) {
-            asm volatile("" : : "r"(shared_secret) : "memory");
+            do_not_optimize_away(shared_secret);
         }
         auto t1 = std::chrono::high_resolution_clock::now();
 

@@ -50,8 +50,9 @@ inline long long read_intel_rapl_uj() {
 }
 
 // Barriera per bloccare le ottimizzazioni aggressive del compilatore (-O3)
-inline void do_not_optimize_away(const std::vector<uint8_t>& vec) {
-    asm volatile("" : : "r"(vec.data()) : "memory");
+template <typename T>
+inline void do_not_optimize_away(const T& val) {
+    asm volatile("" : : "g"(val) : "memory");
 }
 
 inline std::string get_data_dir() {
