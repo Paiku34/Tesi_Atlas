@@ -1,0 +1,7 @@
+Component,Path,Flash_Text_Bytes,RAM_Data_Bytes,RAM_BSS_Bytes,Total_Bytes,Fits_Cortex_M_Flash
+Ascon AEAD (opt64 stand-alone),build/CMakeFiles/bench_ascon.dir/src/ascon-c/crypto_aead/asconaead128/opt64/aead.c.o,18198,0,0,18198,Sì (<= 512 KB)
+Benchmark Ascon (ELF),build/bench_ascon,41977,1952,568,44497,Sì (<= 512 KB)
+Benchmark Libsodium (ELF),build/bench_libsodium,22915,2080,568,25563,Sì (<= 512 KB)
+Benchmark OpenSSL (ELF),build/bench_openssl,23090,2128,568,25786,Sì (<= 512 KB)
+Benchmark Key Management (ELF),build/bench_key_management,18161,1496,568,20225,Sì (<= 512 KB)
+Benchmark ML-KEM liboqs (ELF),build/bench_mlkem,35731,1928,568,38227,Sì (<= 512 KB)

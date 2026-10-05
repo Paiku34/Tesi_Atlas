@@ -1,0 +1,38 @@
+
+wget https://github.com/Kitware/CMake/releases/download/v3.26.4/cmake-3.26.4-linux-x86_64.tar.gz
+tar -zxvf cmake-3.26.4-linux-x86_64.tar.gz -C ~/tesi_env --strip-components=1
+
+
+git clone --depth=1 https://github.com/open-quantum-safe/liboqs.git
+cd liboqs
+mkdir build
+cd build
+
+# Usiamo il CMake locale e gli diciamo di installare in ~/tesi_env
+~/tesi_env/bin/cmake -GNinja -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX=$HOME/tesi_env -DOQS_MINIMAL_BUILD="KEM_ml_kem" -DOQS_ENABLE_SIG_UOV=OFF ..
+ninja
+ninja install
+
+wget https://www.openssl.org/source/openssl-3.0.11.tar.gz
+tar -zxf openssl-3.0.11.tar.gz
+cd openssl-3.0.11
+# Nota: NIENTE sudo! Diciamo di installare tutto in ~/tesi_env
+./config --prefix=$HOME/tesi_env --openssldir=$HOME/tesi_env/ssl
+make -j$(nproc)
+make install
+
+# Passiamo il prefisso per trovate OpenSSL 3.0 e liboqs locali
+~/tesi_env/bin/cmake -DCMAKE_PREFIX_PATH=$HOME/tesi_env ..
+make -j$(nproc)
+ 
+
+python3 -m venv tesi_python_env
+source tesi_python_env/bin/activate
+pip install --upgrade pip
+pip install numpy matplotlib pandas
+
+cd ~/tesi_env/tesi/metriche_librerie/build
+
+rm -rf CMakeCache.txt CMakeFiles/ Makefile cmake_install.cmake
+
+sudo env PATH="$VIRTUAL_ENV/bin:$PATH" LD_LIBRARY_PATH="$HOME/tesi_env/lib:$HOME/tesi_env/lib64" bash ../run_all.sh
