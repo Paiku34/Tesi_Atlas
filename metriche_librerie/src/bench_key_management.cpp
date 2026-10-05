@@ -167,23 +167,26 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
 }
 
 // -----------------------------------------------------------------------------
-// 3. ECC X25519 (ECDH - Libsodium)
+// 3. ECC X25519 (ECDH - Libsodium Key Exchange crypto_kx)
 // -----------------------------------------------------------------------------
 void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
     res.scheme_name = "ECDH X25519 (Libsodium)";
     res.paradigm = "Classical (ECC)";
-    res.exchanged_bytes = 64;
+    res.exchanged_bytes = crypto_kx_PUBLICKEYBYTES * 2; // 32 B client pk + 32 B server pk = 64 bytes
 
-    uint8_t client_sk[crypto_scalarmult_SCALARBYTES];
-    uint8_t client_pk[crypto_scalarmult_BYTES];
-    uint8_t server_sk[crypto_scalarmult_SCALARBYTES];
-    uint8_t server_pk[crypto_scalarmult_BYTES];
-    uint8_t shared_secret[crypto_scalarmult_BYTES];
+    uint8_t client_pk[crypto_kx_PUBLICKEYBYTES];
+    uint8_t client_sk[crypto_kx_SECRETKEYBYTES];
+    uint8_t server_pk[crypto_kx_PUBLICKEYBYTES];
+    uint8_t server_sk[crypto_kx_SECRETKEYBYTES];
+    uint8_t session_key[crypto_kx_SESSIONKEYBYTES];
 
-    // Warm-up
+    // Warm-up completo (KeyGen + Derivazione singola chiave di sessione)
     for (int i = 0; i < 20; i++) {
-        randombytes_buf(client_sk, sizeof(client_sk));
-        crypto_scalarmult_base(client_pk, client_sk);
+        crypto_kx_keypair(client_pk, client_sk);
+        crypto_kx_keypair(server_pk, server_sk);
+        if (crypto_kx_client_session_keys(session_key, NULL, client_pk, client_sk, server_pk) == 0) {
+            do_not_optimize_away(session_key);
+        }
     }
 
     res.sample_times_us.clear();
@@ -199,16 +202,14 @@ void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
     for (int i = 0; i < iterations; i++) {
         auto t0 = std::chrono::high_resolution_clock::now();
         // Client KeyGen
-        randombytes_buf(client_sk, sizeof(client_sk));
-        crypto_scalarmult_base(client_pk, client_sk);
+        crypto_kx_keypair(client_pk, client_sk);
 
         // Server KeyGen
-        randombytes_buf(server_sk, sizeof(server_sk));
-        crypto_scalarmult_base(server_pk, server_sk);
+        crypto_kx_keypair(server_pk, server_sk);
 
-        // Derivazione segreto condiviso (lato Client)
-        if (crypto_scalarmult(shared_secret, client_sk, server_pk) == 0) {
-            do_not_optimize_away(shared_secret);
+        // Derivazione singola chiave di sessione (lato Client)
+        if (crypto_kx_client_session_keys(session_key, NULL, client_pk, client_sk, server_pk) == 0) {
+            do_not_optimize_away(session_key);
         }
         auto t1 = std::chrono::high_resolution_clock::now();
 
