@@ -433,7 +433,6 @@ int main() {
               << "| " << std::setw(26) << "Schema"
               << "| " << std::setw(22) << "Paradigma"
               << "| " << std::setw(12) << "Scambiati"
-              << "| " << std::setw(8)  << "Frames"
               << "| " << std::setw(14) << "Tempo Medio(us)"
               << "| " << std::setw(12) << "Cicli/Op"
               << "| " << std::setw(12) << "Energia(uJ)"
@@ -442,7 +441,6 @@ int main() {
     std::cout << "|" << std::string(27, '-')
               << "|" << std::string(23, '-')
               << "|" << std::string(13, '-')
-              << "|" << std::string(9, '-')
               << "|" << std::string(16, '-')
               << "|" << std::string(13, '-')
               << "|" << std::string(14, '-')
@@ -465,7 +463,6 @@ int main() {
                       << "| " << std::setw(26) << res.scheme_name
                       << "| " << std::setw(22) << res.paradigm
                       << "| " << std::setw(12) << (std::to_string(res.exchanged_bytes) + " B")
-                      << "| " << std::setw(8)  << res.anep_frames
                       << "| " << std::fixed << std::setprecision(2)
                       << std::setw(14) << res.total_us
                       << "| " << std::setw(12) << res.total_cycles

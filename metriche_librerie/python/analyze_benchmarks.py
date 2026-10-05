@@ -293,17 +293,17 @@ def analyze_key_management():
     res_df['sort_key'] = res_df['Scheme'].apply(lambda x: order.index(x) if x in order else 99)
     res_df = res_df.sort_values('sort_key').drop(columns=['sort_key'])
 
-    print(f"{'Schema':<26} | {'Paradigma':<22} | {'Scambiati':<10} | {'Frames':<7} | {'Tempo Medio':<18} | {'Mediana':<10} | {'Energia(uJ)':<11} | {'RAM(KB)':<8}")
-    print("-" * 125)
+    print(f"{'Schema':<26} | {'Paradigma':<22} | {'Scambiati':<10} | {'Tempo Medio':<18} | {'Mediana':<10} | {'Energia(uJ)':<11} | {'RAM(KB)':<8}")
+    print("-" * 115)
     for _, r in res_df.iterrows():
-        print(f"{r['Scheme']:<26} | {r['Paradigm']:<22} | {str(r['Exchanged (B)']) + ' B':<10} | {r['ANEP Frames']:<7} | {r['Mean Latency (us)']:0.2f} +/- {r['CI95 (+/- us)']:0.3f} us | {r['Median Latency (us)']:0.2f} us   | {r['Energy/Op (uJ)']:<11} | {r['RAM Peak (KB)']}")
+        print(f"{r['Scheme']:<26} | {r['Paradigm']:<22} | {str(r['Exchanged (B)']) + ' B':<10} | {r['Mean Latency (us)']:0.2f} +/- {r['CI95 (+/- us)']:0.3f} us | {r['Median Latency (us)']:0.2f} us   | {r['Energy/Op (uJ)']:<11} | {r['RAM Peak (KB)']}")
 
     summary_path = os.path.join(DATA_DIR, "key_management_summary_ci95.csv")
     export_df = res_df.drop(columns=['_energy_val'])
     export_df.to_csv(summary_path, index=False)
     print(f"\n[OK] Tabella completa salvata in: {summary_path}")
 
-    # --- GRAFICO 4: Trade-off Tempo di Handshake vs Byte Scambiati (Radio ANEP-96) ---
+    # --- GRAFICO 4: Trade-off Tempo di Handshake vs Byte Scambiati ---
     fig, ax1 = plt.subplots(figsize=(10, 6))
 
     schemes = res_df['Scheme'].values
@@ -311,7 +311,6 @@ def analyze_key_management():
     means = res_df['Mean Latency (us)'].values
     errors = res_df['CI95 (+/- us)'].values
     bytes_exchanged = res_df['Exchanged (B)'].values
-    frames = res_df['ANEP Frames'].values
 
     bars = ax1.barh(y_pos, means, xerr=errors, capsize=4, color='#3498db', alpha=0.85, label='Compute Latency (μs, 95% CI)')
     ax1.set_yticks(y_pos)
@@ -321,10 +320,10 @@ def analyze_key_management():
     ax1.tick_params(axis='x', labelcolor='#2980b9')
     ax1.grid(True, axis='x')
 
-    for i, (b, f, mean) in enumerate(zip(bytes_exchanged, frames, means)):
-        ax1.text(mean + errors[i] + 1.5, i, f"{b} B ({f} frames)", va='center', fontsize=9.5, fontweight='bold', color='#2c3e50')
+    for i, (b, mean) in enumerate(zip(bytes_exchanged, means)):
+        ax1.text(mean + errors[i] + 1.5, i, f"{b} B", va='center', fontsize=9.5, fontweight='bold', color='#2c3e50')
 
-    ax1.set_title('Key Management Roadmap: Latency vs Radio Transmission Overhead (NATO ANEP-96)')
+    ax1.set_title('Key Management Roadmap: Computation Latency vs Exchanged Bytes')
     plt.tight_layout()
     plt.savefig(os.path.join(PLOTS_DIR, 'key_management_tradeoff.png'), dpi=300)
     plt.close()
