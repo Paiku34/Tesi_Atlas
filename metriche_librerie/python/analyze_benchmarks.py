@@ -507,8 +507,8 @@ def analyze_code_size():
     binaries = [
         ("Ascon AEAD (opt64 stand-alone)", "build/CMakeFiles/bench_ascon.dir/src/ascon-c/crypto_aead/asconaead128/opt64/aead.c.o"),
         ("Benchmark Ascon (ELF)", "build/bench_ascon"),
-        ("Benchmark Libsodium (ELF)", "build/bench_libsodium"),
-        ("Benchmark OpenSSL (ELF)", "build/bench_openssl"),
+        ("Benchmark Libsodium AEAD (ELF)", "build/bench_aead_libsodium" if os.path.exists(os.path.join(BASE_DIR, "build/bench_aead_libsodium")) else "build/bench_libsodium"),
+        ("Benchmark OpenSSL AEAD (ELF)", "build/bench_aead_openssl" if os.path.exists(os.path.join(BASE_DIR, "build/bench_aead_openssl")) else "build/bench_openssl"),
         ("Benchmark Key Management (ELF)", "build/bench_key_management"),
         ("Benchmark ML-KEM liboqs (ELF)", "build/bench_mlkem")
     ]

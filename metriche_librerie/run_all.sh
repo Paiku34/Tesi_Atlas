@@ -68,7 +68,7 @@ echo ""
 echo "=========================================================================="
 echo " 2. CODE SIZE & BINARY FOOTPRINT (Flash/ROM Memory Footprint)"
 echo "=========================================================================="
-size build/bench_ascon build/bench_libsodium build/bench_openssl build/bench_key_management build/bench_mlkem 2>/dev/null
+size build/bench_ascon build/bench_aead_libsodium build/bench_aead_openssl build/bench_key_management build/bench_mlkem 2>/dev/null
 
 # =========================================================================
 # FASE 2: ESECUZIONE BENCHMARK ISOLATI
@@ -82,8 +82,8 @@ echo "==========================================================================
 rm -f data/bulk_encryption_raw.csv data/key_management_raw.csv data/mlkem_breakdown_raw.csv
 
 ./build/bench_ascon
-./build/bench_libsodium
-./build/bench_openssl
+./build/bench_aead_libsodium
+./build/bench_aead_openssl
 
 if [ -f "./build/bench_key_management" ]; then
     ./build/bench_key_management

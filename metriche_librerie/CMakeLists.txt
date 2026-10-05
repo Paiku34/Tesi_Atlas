@@ -25,21 +25,21 @@ add_executable(bench_ascon src/bench_ascon.cpp ${ASCON_SRCS})
 target_include_directories(bench_ascon PRIVATE ${ASCON_DIR} ${ASCON_TESTS_DIR})
 
 # ---------------------------------------------------------
-# 2. LIBSODIUM
+# 2. LIBSODIUM AEAD
 # ---------------------------------------------------------
 find_library(SODIUM_LIB NAMES sodium REQUIRED)
 find_path(SODIUM_INCLUDE_DIR NAMES sodium.h PATHS /usr/local/include /usr/include /opt/homebrew/include)
-add_executable(bench_libsodium src/bench_libsodium.cpp)
-target_include_directories(bench_libsodium PRIVATE ${SODIUM_INCLUDE_DIR})
-target_link_libraries(bench_libsodium PRIVATE ${SODIUM_LIB})
+add_executable(bench_aead_libsodium src/bench_aead_libsodium.cpp)
+target_include_directories(bench_aead_libsodium PRIVATE ${SODIUM_INCLUDE_DIR})
+target_link_libraries(bench_aead_libsodium PRIVATE ${SODIUM_LIB})
 
 # ---------------------------------------------------------
-# 3. OPENSSL
+# 3. OPENSSL AEAD
 # ---------------------------------------------------------
 find_package(OpenSSL REQUIRED)
-add_executable(bench_openssl src/bench_openssl.cpp)
-target_include_directories(bench_openssl PRIVATE ${OPENSSL_INCLUDE_DIR})
-target_link_libraries(bench_openssl PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+add_executable(bench_aead_openssl src/bench_aead_openssl.cpp)
+target_include_directories(bench_aead_openssl PRIVATE ${OPENSSL_INCLUDE_DIR})
+target_link_libraries(bench_aead_openssl PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 # ---------------------------------------------------------
 # 4. ML-KEM POST-QUANTUM (liboqs)
