@@ -373,11 +373,135 @@ def analyze_key_management():
     print(f"[OK] Grafici Key Management salvati in {PLOTS_DIR}/ (PNG 300 DPI)")
 
 # =========================================================================
-# 3. CODE SIZE & BINARY FOOTPRINT (FLASH / ROM vs RAM)
+# 3. ML-KEM GRANULAR BREAKDOWN ANALYSIS (KeyGen vs Encaps vs Decaps)
+# =========================================================================
+def analyze_mlkem_breakdown():
+    csv_path = find_csv(["mlkem_breakdown_raw.csv"])
+    if not csv_path:
+        print("[SKIP] mlkem_breakdown_raw.csv non trovato.")
+        return
+
+    print("\n" + "=" * 115)
+    print(" 3. ANALISI ML-KEM GRANULAR BREAKDOWN — FASI OPERATIVE (KEYGEN, ENCAPSULATION, DECAPSULATION)")
+    print("=" * 115)
+
+    df = pd.read_csv(csv_path)
+    df['variant'] = df['variant'].astype(str).str.strip('"')
+    df['phase'] = df['phase'].astype(str).str.strip('"')
+
+    has_energy = 'energy_uj' in df.columns
+    has_cycles = 'cycles' in df.columns
+
+    variants_order = ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"]
+    phases_order = ["KeyGen", "Encapsulation", "Decapsulation", "Handshake_Total"]
+
+    results = []
+
+    for var in variants_order:
+        sub_var = df[df['variant'] == var]
+        if sub_var.empty:
+            continue
+        for ph in phases_order:
+            group = sub_var[sub_var['phase'] == ph]
+            if group.empty:
+                continue
+
+            latencies = group['latency_us'].values
+            mean_us, median_us, std_us, ci95, valid_n = compute_ci95(latencies)
+            payload = int(group['payload_bytes'].iloc[0])
+            cycles = int(group['cycles'].iloc[0]) if has_cycles else 0
+
+            energy_str = "N/A"
+            energy_val = -1.0
+            if has_energy:
+                e_series = group['energy_uj']
+                if not e_series.empty and e_series.iloc[0] > 0:
+                    energy_val = float(e_series.iloc[0])
+                    energy_str = f"{energy_val:0.2f}"
+
+            role_desc = "Gateway (Server)" if ph in ["KeyGen", "Decapsulation"] else ("Sonobuoy (Edge)" if ph == "Encapsulation" else "Full Handshake")
+
+            results.append({
+                'Variant': var,
+                'Phase': ph,
+                'Role': role_desc,
+                'Payload (B)': payload,
+                'Mean Latency (us)': round(mean_us, 3),
+                'Median Latency (us)': round(median_us, 3),
+                'StdDev (us)': round(std_us, 3),
+                'CI95 (+/- us)': round(ci95, 3),
+                'Cycles/Op': cycles,
+                'Energy/Op (uJ)': energy_str,
+                'Samples': valid_n,
+                '_energy_val': energy_val
+            })
+
+    if not results:
+        return
+
+    res_df = pd.DataFrame(results)
+
+    # Stampa tabella console
+    print(f"{'Variante':<14} | {'Fase':<16} | {'Ruolo':<18} | {'Payload':<10} | {'Tempo Medio':<18} | {'Mediana':<10} | {'Cycles/Op':<11} | {'Energia(uJ)':<11}")
+    print("-" * 115)
+    for _, r in res_df.iterrows():
+        print(f"{r['Variant']:<14} | {r['Phase']:<16} | {r['Role']:<18} | {r['Payload (B)']:<10} | {r['Mean Latency (us)']:0.2f} +/- {r['CI95 (+/- us)']:0.3f} us | {r['Median Latency (us)']:0.2f} us   | {r['Cycles/Op']:<11} | {r['Energy/Op (uJ)']:<11}")
+
+    summary_path = os.path.join(DATA_DIR, "mlkem_breakdown_summary_ci95.csv")
+    res_df.drop(columns=['_energy_val']).to_csv(summary_path, index=False)
+    print(f"\n[OK] Tabella ML-KEM Breakdown salvata in: {summary_path}")
+
+    # --- GRAFICO BREAKDOWN DELLE FASI (KeyGen vs Encaps vs Decaps) ---
+    plot_df = res_df[res_df['Phase'] != 'Handshake_Total']
+    if not plot_df.empty:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        x = np.arange(len(variants_order))
+        width = 0.25
+
+        phases_to_plot = ["KeyGen", "Encapsulation", "Decapsulation"]
+        colors = {
+            "KeyGen": "#3498db",
+            "Encapsulation": "#e67e22",
+            "Decapsulation": "#2ecc71"
+        }
+        labels_legend = {
+            "KeyGen": "KeyGen (Gateway PK/SK)",
+            "Encapsulation": "Encapsulation (Sonobuoy Edge)",
+            "Decapsulation": "Decapsulation (Gateway SS)"
+        }
+
+        for idx, ph in enumerate(phases_to_plot):
+            ph_data = [
+                plot_df[(plot_df['Variant'] == v) & (plot_df['Phase'] == ph)]['Mean Latency (us)'].values[0]
+                if not plot_df[(plot_df['Variant'] == v) & (plot_df['Phase'] == ph)].empty else 0.0
+                for v in variants_order
+            ]
+            ph_err = [
+                plot_df[(plot_df['Variant'] == v) & (plot_df['Phase'] == ph)]['CI95 (+/- us)'].values[0]
+                if not plot_df[(plot_df['Variant'] == v) & (plot_df['Phase'] == ph)].empty else 0.0
+                for v in variants_order
+            ]
+            offset = (idx - 1) * width
+            ax.bar(x + offset, ph_data, width, yerr=ph_err, capsize=4,
+                   label=labels_legend[ph], color=colors[ph], alpha=0.85)
+
+        ax.set_ylabel('Latency (μs, 95% CI)')
+        ax.set_title('ML-KEM Granular Breakdown: Gateway Phases vs Sonobuoy Encapsulation')
+        ax.set_xticks(x)
+        ax.set_xticklabels(variants_order)
+        ax.legend(frameon=True)
+        ax.grid(True, axis='y')
+        plt.tight_layout()
+        plt.savefig(os.path.join(PLOTS_DIR, 'mlkem_breakdown_phases.png'), dpi=300)
+        plt.close()
+        print(f"[OK] Grafico ML-KEM Breakdown salvato in {PLOTS_DIR}/ (PNG 300 DPI)")
+
+# =========================================================================
+# 4. CODE SIZE & BINARY FOOTPRINT (FLASH / ROM vs RAM)
 # =========================================================================
 def analyze_code_size():
     print("\n" + "=" * 115)
-    print(" 3. ANALISI CODE SIZE & MEMORY FOOTPRINT (FLASH/ROM & RAM vs LIMITI EMBEDDED CORTEX-M)")
+    print(" 4. ANALISI CODE SIZE & MEMORY FOOTPRINT (FLASH/ROM & RAM vs LIMITI EMBEDDED CORTEX-M)")
     print("=" * 115)
 
     binaries = [
@@ -459,6 +583,7 @@ def main():
     print("=" * 70)
     analyze_bulk_encryption()
     analyze_key_management()
+    analyze_mlkem_breakdown()
     analyze_code_size()
     print("\n" + "=" * 70)
     print(f" ELABORAZIONE COMPLETATA CON SUCCESSO!")

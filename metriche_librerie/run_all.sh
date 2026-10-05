@@ -79,7 +79,7 @@ echo " 3. ESECUZIONE BENCHMARK ISOLATI (Misure 1-a-1 salvate in data/)"
 echo "=========================================================================="
 
 # Resetta i CSV dei dati grezzi per nuova run pulita
-rm -f data/bulk_encryption_raw.csv data/key_management_raw.csv
+rm -f data/bulk_encryption_raw.csv data/key_management_raw.csv data/mlkem_breakdown_raw.csv
 
 ./build/bench_ascon
 ./build/bench_libsodium
