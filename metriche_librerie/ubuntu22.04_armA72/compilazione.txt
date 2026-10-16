@@ -1,0 +1,59 @@
+# -------------------------------------------------------------
+# 1. Installazione dipendenze di sistema via APT (Ubuntu 22.04)
+# -------------------------------------------------------------
+sudo apt update && sudo apt install -y \
+    build-essential cmake ninja-build \
+    libsodium-dev libssl-dev \
+    python3-pip python3-venv git cpufrequtils
+
+# -------------------------------------------------------------
+# 2. Compilazione e installazione di liboqs (per ML-KEM su aarch64)
+# -------------------------------------------------------------
+# Nota: NON scaricare pacchetti binari x86_64!
+cd ~
+git clone --depth=1 https://github.com/open-quantum-safe/liboqs.git
+cd liboqs
+mkdir build && cd build
+
+# Installiamo in /usr/local (o in un prefisso locale se non hai sudo)
+cmake -GNinja \
+    -DBUILD_SHARED_LIBS=ON \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DOQS_MINIMAL_BUILD="KEM_ml_kem" \
+    -DOQS_ENABLE_SIG_UOV=OFF ..
+
+ninja
+sudo ninja install
+sudo ldconfig
+
+# -------------------------------------------------------------
+# 3. Setup Virtualenv Python per elaborazione dati e grafici
+# -------------------------------------------------------------
+cd ~
+python3 -m venv tesi_python_env
+source ~/tesi_python_env/bin/activate
+pip install --upgrade pip
+pip install numpy matplotlib pandas scipy
+
+# -------------------------------------------------------------
+# 4. Fissaggio Frequenza CPU Raspberry Pi 4 a 1.8 GHz (performance)
+# -------------------------------------------------------------
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+
+# Verifica frequenza effettiva
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq
+
+# -------------------------------------------------------------
+# 5. Build della suite di Benchmark
+# -------------------------------------------------------------
+cd ~/metriche_librerie
+rm -rf build && mkdir build && cd build
+
+# Compilazione binari Release (-O3)
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j$(nproc)
+
+# -------------------------------------------------------------
+# 6. Esecuzione Benchmark
+# -------------------------------------------------------------
+sudo env PATH="$VIRTUAL_ENV/bin:$PATH" LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH" bash ../run_all.sh
