@@ -86,7 +86,7 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
     std::vector<uint8_t> shared_secret_sender(kem->length_shared_secret);
     std::vector<uint8_t> shared_secret_receiver(kem->length_shared_secret);
 
-    const int ITERATIONS = 500;
+    const int ITERATIONS = 1000;
 
     // 1. KeyGen (generazione coppia chiavi)
     res.keygen.phase_name = "KeyGen";
@@ -189,6 +189,9 @@ void append_mlkem_to_csvs(const std::string& general_csv,
 }
 
 int main() {
+    // Warm-up contatori cicli hardware (Linux PMU / x86)
+    (void)read_cpu_cycles();
+
     std::cout << "\n=======================================================================================================\n";
     std::cout << " BENCHMARK: ML-KEM POST-QUANTUM (liboqs) — FASI GRANULARI & HANDSHAKE COMPLETO\n";
     std::cout << "=======================================================================================================\n";

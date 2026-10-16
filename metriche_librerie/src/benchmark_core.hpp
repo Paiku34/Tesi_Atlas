@@ -33,7 +33,15 @@ inline unsigned long long read_cpu_cycles() {
     return __rdtscp(&aux);
 #elif defined(__linux__) && defined(__aarch64__)
     static int perf_fd = -2;
-    if (perf_fd == -2) {
+    static pid_t last_pid = 0;
+    pid_t current_pid = getpid();
+
+    if (perf_fd == -2 || current_pid != last_pid) {
+        if (perf_fd >= 0) {
+            close(perf_fd);
+        }
+        last_pid = current_pid;
+
         struct perf_event_attr pe;
         memset(&pe, 0, sizeof(struct perf_event_attr));
         pe.type = PERF_TYPE_HARDWARE;
@@ -144,6 +152,9 @@ inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t
               << "|\n";
     std::cout << "|" << std::string(11, '-') << "|" << std::string(12, '-') << "|" << std::string(14, '-') << "|" << std::string(14, '-') << "|" << std::string(14, '-') << "|" << std::string(16, '-') << "|\n";
 
+    // Warm-up dei contatori di ciclo (inizializza perf_event_open prima del cronometro)
+    (void)read_cpu_cycles();
+
     for (size_t size : packet_sizes) {
         std::vector<uint8_t> payload(size, 0x42);
         std::vector<uint8_t> ciphertext;
@@ -157,12 +168,11 @@ inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t
         // --- FASE 2: MISURAZIONE REALE ---
         long long energy_start = 0, energy_end = 0;
         
-        auto start_time = std::chrono::high_resolution_clock::now();
-        unsigned long long start_cycles = read_cpu_cycles();
-
         if (rapl_available) {
             energy_start = read_intel_rapl_uj();
         }
+        unsigned long long start_cycles = read_cpu_cycles();
+        auto start_time = std::chrono::high_resolution_clock::now();
 
         const int MEASUREMENT_ITERATIONS = 5000;
         std::vector<double> sample_latencies;
@@ -178,14 +188,14 @@ inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t
             sample_latencies.push_back(s_us);
         }
 
+        auto end_time = std::chrono::high_resolution_clock::now();
+        unsigned long long end_cycles = read_cpu_cycles();
+
         if (rapl_available) {
             energy_end = read_intel_rapl_uj();
         }
 
-        unsigned long long end_cycles = read_cpu_cycles();
         unsigned long long total_cycles = (end_cycles >= start_cycles) ? ((end_cycles - start_cycles) / MEASUREMENT_ITERATIONS) : 0;
-        auto end_time = std::chrono::high_resolution_clock::now();
-        
         std::chrono::duration<double, std::micro> elapsed = (end_time - start_time) / (double)MEASUREMENT_ITERATIONS;
         double elapsed_us = elapsed.count();
 

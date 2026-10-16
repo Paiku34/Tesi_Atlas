@@ -229,6 +229,9 @@ void append_samples_to_csv(const std::string& filename, const KeyMgmtResult& res
 }
 
 int main() {
+    // Warm-up contatori cicli hardware (Linux PMU / x86)
+    (void)read_cpu_cycles();
+
     if (sodium_init() < 0) {
         std::cerr << "Errore inizializzazione sodium!\n";
         return 1;
@@ -264,7 +267,7 @@ int main() {
               << "|" << std::string(10, '-')
               << "|\n";
 
-    const int ITERATIONS = 500; // 500 campioni singoli 1-a-1 senza batching
+    const int ITERATIONS = 1000; // 1000 campioni singoli 1-a-1 senza batching
 
     auto run_and_print = [&](auto bench_func) {
         pid_t pid = fork();
