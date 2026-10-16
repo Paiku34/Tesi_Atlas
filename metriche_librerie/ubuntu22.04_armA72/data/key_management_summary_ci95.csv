@@ -1,0 +1,7 @@
+Scheme,Paradigm,Exchanged (B),Mean Latency (us),Median Latency (us),StdDev (us),CI95 (+/- us),Cycles/Op,Energy/Op (uJ),RAM Peak (KB),Samples
+PSK + KDF (Libsodium),Symmetric Pre-Shared,0,0.772,0.778,0.018,0.001,1302,N/A,2024,999
+Symmetric Handshake,Symmetric 2-Way Auth,80,16.495,16.315,2.748,0.171,11786,N/A,2084,998
+ECDH X25519 (Libsodium),Classical (ECC),64,474.024,467.5,27.326,1.696,689824,N/A,2084,1000
+ML-KEM-512,Lattice (PQC),1568,177.83,174.111,11.128,0.691,257144,N/A,4636,1000
+ML-KEM-768,Lattice (PQC),2272,274.863,270.093,16.315,1.012,401323,N/A,5280,1000
+ML-KEM-1024,Lattice (PQC),3136,388.175,384.418,18.278,1.134,570737,N/A,5280,1000

@@ -1,0 +1,13 @@
+Variant,Phase,Role,Payload (B),Mean Latency (us),Median Latency (us),StdDev (us),CI95 (+/- us),Cycles/Op,Energy/Op (uJ),Samples
+ML-KEM-512,KeyGen,Gateway (Server),800,57.153,54.982,10.49,0.653,81255,N/A,995
+ML-KEM-512,Encapsulation,Sonobuoy (Edge),768,60.984,59.963,5.023,0.312,87258,N/A,1000
+ML-KEM-512,Decapsulation,Gateway (Server),0,58.2,57.093,8.663,0.538,86561,N/A,1000
+ML-KEM-512,Handshake_Total,Full Handshake,1568,177.83,174.111,11.128,0.691,257144,N/A,1000
+ML-KEM-768,KeyGen,Gateway (Server),1184,86.738,83.852,13.519,0.839,124912,N/A,999
+ML-KEM-768,Encapsulation,Sonobuoy (Edge),1088,89.795,88.111,7.779,0.483,129888,N/A,1000
+ML-KEM-768,Decapsulation,Gateway (Server),0,91.165,89.667,11.025,0.684,135847,N/A,1000
+ML-KEM-768,Handshake_Total,Full Handshake,2272,274.863,270.093,16.315,1.012,401323,N/A,1000
+ML-KEM-1024,KeyGen,Gateway (Server),1568,122.504,118.5,17.354,1.077,177638,N/A,1000
+ML-KEM-1024,Encapsulation,Sonobuoy (Edge),1568,129.509,126.5,12.418,0.771,188515,N/A,1000
+ML-KEM-1024,Decapsulation,Gateway (Server),0,134.289,132.037,10.644,0.661,199977,N/A,1000
+ML-KEM-1024,Handshake_Total,Full Handshake,3136,388.175,384.418,18.278,1.134,570737,N/A,1000
