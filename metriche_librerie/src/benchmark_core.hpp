@@ -21,6 +21,48 @@
 #define COMPILER_IS_X86
 #endif
 
+#if defined(__linux__) && defined(__aarch64__)
+#include <linux/perf_event.h>
+#include <sys/syscall.h>
+#endif
+
+// Lettura unificata dei cicli CPU hardware per x86_64 e ARMv8 (Cortex-A / Raspberry Pi)
+inline unsigned long long read_cpu_cycles() {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    unsigned int aux;
+    return __rdtscp(&aux);
+#elif defined(__linux__) && defined(__aarch64__)
+    static int perf_fd = -2;
+    if (perf_fd == -2) {
+        struct perf_event_attr pe;
+        memset(&pe, 0, sizeof(struct perf_event_attr));
+        pe.type = PERF_TYPE_HARDWARE;
+        pe.size = sizeof(struct perf_event_attr);
+        pe.config = PERF_COUNT_HW_CPU_CYCLES;
+        pe.disabled = 0;
+        pe.exclude_kernel = 1;
+        pe.exclude_hv = 1;
+        perf_fd = (int)syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
+    }
+    if (perf_fd >= 0) {
+        unsigned long long count = 0;
+        if (read(perf_fd, &count, sizeof(count)) == sizeof(count)) {
+            return count;
+        }
+    }
+    // Fallback: ARMv8 Generic Timer (cntvct_el0)
+    uint64_t val;
+    asm volatile("isb; mrs %0, cntvct_el0" : "=r"(val));
+    return (unsigned long long)val;
+#elif defined(__aarch64__)
+    uint64_t val;
+    asm volatile("isb; mrs %0, cntvct_el0" : "=r"(val));
+    return (unsigned long long)val;
+#else
+    return 0ULL;
+    #endif
+}
+
 class ICryptoAlgorithm {
 public:
     virtual ~ICryptoAlgorithm() = default;
@@ -116,10 +158,7 @@ inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t
         long long energy_start = 0, energy_end = 0;
         
         auto start_time = std::chrono::high_resolution_clock::now();
-        #ifdef COMPILER_IS_X86
-        unsigned int aux;
-        unsigned long long start_cycles = __rdtscp(&aux);
-        #endif
+        unsigned long long start_cycles = read_cpu_cycles();
 
         if (rapl_available) {
             energy_start = read_intel_rapl_uj();
@@ -143,12 +182,8 @@ inline void run_benchmark_suite(ICryptoAlgorithm* algo, const std::vector<size_t
             energy_end = read_intel_rapl_uj();
         }
 
-        #ifdef COMPILER_IS_X86
-        unsigned long long end_cycles = __rdtscp(&aux);
-        unsigned long long total_cycles = (end_cycles - start_cycles) / MEASUREMENT_ITERATIONS;
-        #else
-        unsigned long long total_cycles = 0;
-        #endif
+        unsigned long long end_cycles = read_cpu_cycles();
+        unsigned long long total_cycles = (end_cycles >= start_cycles) ? ((end_cycles - start_cycles) / MEASUREMENT_ITERATIONS) : 0;
         auto end_time = std::chrono::high_resolution_clock::now();
         
         std::chrono::duration<double, std::micro> elapsed = (end_time - start_time) / (double)MEASUREMENT_ITERATIONS;

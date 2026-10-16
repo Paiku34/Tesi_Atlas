@@ -41,10 +41,7 @@ void benchmark_phase(KemPhaseResult& pr, int iterations, Func&& func) {
 
     long long energy_start = read_intel_rapl_uj();
 
-    #ifdef COMPILER_IS_X86
-    unsigned int aux;
-    unsigned long long c0 = __rdtscp(&aux);
-    #endif
+    unsigned long long c0 = read_cpu_cycles();
 
     for (int i = 0; i < iterations; i++) {
         auto t0 = std::chrono::high_resolution_clock::now();
@@ -54,10 +51,8 @@ void benchmark_phase(KemPhaseResult& pr, int iterations, Func&& func) {
         pr.sample_times_us.push_back(sample_us);
     }
 
-    #ifdef COMPILER_IS_X86
-    unsigned long long c1 = __rdtscp(&aux);
-    pr.cycles = (c1 - c0) / iterations;
-    #endif
+    unsigned long long c1 = read_cpu_cycles();
+    pr.cycles = (c1 >= c0) ? ((c1 - c0) / iterations) : 0;
 
     long long energy_end = read_intel_rapl_uj();
     if (energy_start != -1 && energy_end >= energy_start) {
