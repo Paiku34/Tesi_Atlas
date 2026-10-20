@@ -32,18 +32,18 @@ target_include_directories(bench_ascon PRIVATE ${ASCON_DIR} ${ASCON_TESTS_DIR})
 # ---------------------------------------------------------
 find_library(SODIUM_LIB NAMES sodium PATHS ${TESI_ENV}/lib ${TESI_ENV}/lib64 REQUIRED)
 find_path(SODIUM_INCLUDE_DIR NAMES sodium.h PATHS ${TESI_ENV}/include REQUIRED)
-add_executable(bench_libsodium src/bench_libsodium.cpp)
-target_include_directories(bench_libsodium PRIVATE ${SODIUM_INCLUDE_DIR})
-target_link_libraries(bench_libsodium PRIVATE ${SODIUM_LIB})
+add_executable(bench_aead_libsodium src/bench_aead_libsodium.cpp)
+target_include_directories(bench_aead_libsodium PRIVATE ${SODIUM_INCLUDE_DIR})
+target_link_libraries(bench_aead_libsodium PRIVATE ${SODIUM_LIB})
 
 # ---------------------------------------------------------
 # 3. OPENSSL
 # ---------------------------------------------------------
 set(OPENSSL_ROOT_DIR "${TESI_ENV}")
 find_package(OpenSSL REQUIRED)
-add_executable(bench_openssl src/bench_openssl.cpp)
-target_include_directories(bench_openssl PRIVATE ${OPENSSL_INCLUDE_DIR})
-target_link_libraries(bench_openssl PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+add_executable(bench_aead_openssl src/bench_aead_openssl.cpp)
+target_include_directories(bench_aead_openssl PRIVATE ${OPENSSL_INCLUDE_DIR})
+target_link_libraries(bench_aead_openssl PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 # ---------------------------------------------------------
 # 4. ML-KEM POST-QUANTUM (liboqs)
