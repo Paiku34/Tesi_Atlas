@@ -8,6 +8,9 @@
 metriche_librerie/build/
 metriche_librerie/data/
 metriche_librerie/plots/
+metriche_librerie/ubuntu22.04_armA72/plots/
+metriche_librerie/ubuntu22.04_armA72/python/
+**/plots/
 **/build/
 **/.cache/
 
