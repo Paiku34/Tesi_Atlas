@@ -9,14 +9,43 @@ import os
 import sys
 import subprocess
 import glob
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import scipy.stats as st
 import matplotlib.pyplot as plt
 
-# Directory paths relative to repository structure
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+def resolve_base_dir():
+    script_base = Path(__file__).resolve().parent.parent
+    cwd = Path.cwd().resolve()
+    markers = [
+        "bulk_encryption_raw.csv",
+        "key_management_raw.csv",
+        "mlkem_breakdown_raw.csv",
+        "bulk_encryption_summary_ci95.csv",
+        "key_management_summary_ci95.csv",
+        "mlkem_breakdown_summary_ci95.csv",
+    ]
+
+    def score(candidate: Path) -> int:
+        score_val = 0
+        data_dir = candidate / "data"
+        plots_dir = candidate / "plots"
+        if data_dir.is_dir():
+            score_val += 2
+        if plots_dir.is_dir():
+            score_val += 1
+        for m in markers:
+            if (data_dir / m).exists():
+                score_val += 1
+        return score_val
+
+    candidates = [cwd, cwd.parent, script_base]
+    best = max(candidates, key=score)
+    return str(best if score(best) >= 2 else script_base)
+
+
+BASE_DIR = resolve_base_dir()
 DATA_DIR = os.path.join(BASE_DIR, "data")
 PLOTS_DIR = os.path.join(BASE_DIR, "plots")
 BUILD_DIR = os.path.join(BASE_DIR, "build")
@@ -49,6 +78,10 @@ def find_csv(filenames):
             if os.path.exists(p) and os.path.getsize(p) > 0:
                 return p
     return None
+
+
+def clean_scheme_label(name):
+    return str(name).replace(" (Libsodium)", "")
 
 def compute_ci95(data, filter_interrupts=True):
     """
@@ -152,7 +185,7 @@ def analyze_bulk_encryption():
     export_df.to_csv(summary_path, index=False)
     print(f"\n[OK] Tabella completa salvata in: {summary_path}")
 
-    # --- GRAFICO 1: Latenza vs Payload (CI 95%) ---
+    # --- GRAFICO 1: Latenza vs Payload ---
     fig, ax = plt.subplots(figsize=(9, 5.5))
     for algo, group in res_df.groupby('Algorithm'):
         group_sorted = group.sort_values('Payload (B)')
@@ -167,7 +200,7 @@ def analyze_bulk_encryption():
         )
     ax.set_xlabel('Payload Dimension (Bytes)')
     ax.set_ylabel('Latency per Packet (μs)')
-    ax.set_title('Bulk Encryption Latency vs Packet Size (with 95% CI)')
+    ax.set_title('Bulk Encryption Latency vs Packet Size')
     ax.set_xticks([32, 64, 128, 255, 512, 1024])
     ax.grid(True)
     ax.legend(frameon=True)
@@ -195,30 +228,25 @@ def analyze_bulk_encryption():
     plt.savefig(os.path.join(PLOTS_DIR, 'bulk_throughput.png'), dpi=300)
     plt.close()
 
-    # --- GRAFICO 3: Energia Intel RAPL (se disponibile o annotazione testbed) ---
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    # --- GRAFICO 3: Energia Intel RAPL (solo se disponibile) ---
     if has_real_energy:
+        fig, ax = plt.subplots(figsize=(9, 5.5))
         for algo, group in res_df.groupby('Algorithm'):
             group_sorted = group.sort_values('Payload (B)')
             valid_energy = group_sorted[group_sorted['_energy_val'] > 0]
             if not valid_energy.empty:
                 ax.plot(valid_energy['Payload (B)'], valid_energy['_energy_val'], marker='^', label=algo)
         ax.set_ylabel('Energy per Packet (μJ)')
-    else:
-        ax.text(0.5, 0.5, 'Sensore Intel RAPL non disponibile su macOS / VM\n(Eseguire sudo ./run_all.sh su banco di prova Linux per visualizzare i μJ reali)', 
-                ha='center', va='center', fontsize=12, color='#7f8c8d', 
-                bbox=dict(boxstyle='round,pad=0.8', facecolor='#f8f9fa', edgecolor='#bdc3c7'))
-        ax.set_ylabel('Energy per Packet (μJ) [N/A su Mac/WSL]')
-
-    ax.set_xlabel('Payload Dimension (Bytes)')
-    ax.set_title('Physical Energy Consumption per Packet (Intel RAPL)')
-    ax.set_xticks([32, 64, 128, 255, 512, 1024])
-    ax.grid(True)
-    if has_real_energy:
+        ax.set_xlabel('Payload Dimension (Bytes)')
+        ax.set_title('Physical Energy Consumption per Packet (Intel RAPL)')
+        ax.set_xticks([32, 64, 128, 255, 512, 1024])
+        ax.grid(True)
         ax.legend(frameon=True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, 'bulk_energy.png'), dpi=300)
-    plt.close()
+        plt.tight_layout()
+        plt.savefig(os.path.join(PLOTS_DIR, 'bulk_energy.png'), dpi=300)
+        plt.close()
+    else:
+        print("[SKIP] Grafico bulk_energy.png non generato: energia RAPL assente/N/A.")
     print(f"[OK] Grafici bulk salvati in {PLOTS_DIR}/ (PNG 300 DPI)")
 
 # =========================================================================
@@ -308,9 +336,10 @@ def analyze_key_management():
     errors = res_df['CI95 (+/- us)'].values
     bytes_exchanged = res_df['Exchanged (B)'].values
 
-    bars = ax1.barh(y_pos, means, xerr=errors, capsize=4, color='#3498db', alpha=0.85, label='Compute Latency (μs, 95% CI)')
+    display_schemes = [clean_scheme_label(s) for s in schemes]
+    bars = ax1.barh(y_pos, means, xerr=errors, capsize=4, color='#3498db', alpha=0.85, label='Compute Latency (μs)')
     ax1.set_yticks(y_pos)
-    ax1.set_yticklabels(schemes)
+    ax1.set_yticklabels(display_schemes)
     ax1.invert_yaxis()
     ax1.set_xlabel('Computation Latency (μs)', color='#2980b9')
     ax1.tick_params(axis='x', labelcolor='#2980b9')
@@ -334,7 +363,7 @@ def analyze_key_management():
             data_to_plot.append(sub['latency_us'].values)
             labels.append(s)
 
-    box = ax.boxplot(data_to_plot, patch_artist=True, labels=labels, showmeans=True, showfliers=False)
+    box = ax.boxplot(data_to_plot, patch_artist=True, tick_labels=labels, showmeans=True, showfliers=False)
     for patch in box['boxes']:
         patch.set_facecolor('#ecf0f1')
         patch.set_edgecolor('#2c3e50')
@@ -348,28 +377,22 @@ def analyze_key_management():
     plt.close()
 
     # --- GRAFICO 6: Energia Key Management (Intel RAPL) ---
-    fig, ax = plt.subplots(figsize=(10, 5.5))
     if has_real_energy:
+        fig, ax = plt.subplots(figsize=(10, 5.5))
         energy_vals = res_df['_energy_val'].values
+        display_schemes = [clean_scheme_label(s) for s in schemes]
         bars = ax.barh(y_pos, energy_vals, color='#e67e22', alpha=0.85)
         ax.set_yticks(y_pos)
-        ax.set_yticklabels(schemes)
+        ax.set_yticklabels(display_schemes)
         ax.invert_yaxis()
-        ax.set_xlabel('Energy Consumption (μJ/op)')
+        ax.set_xlabel('Energy Consumption (μJ)')
+        ax.set_title('Key Management Roadmap: Energy Consumption per Operation')
+        ax.grid(True, axis='x')
+        plt.tight_layout()
+        plt.savefig(os.path.join(PLOTS_DIR, 'key_management_energy.png'), dpi=300)
+        plt.close()
     else:
-        ax.text(0.5, 0.5, 'Sensore Intel RAPL non disponibile su macOS / VM\n(Eseguire sudo ./run_all.sh su Linux per misurare i μJ di handshake)', 
-                ha='center', va='center', fontsize=12, color='#7f8c8d', 
-                bbox=dict(boxstyle='round,pad=0.8', facecolor='#f8f9fa', edgecolor='#bdc3c7'))
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(schemes)
-        ax.invert_yaxis()
-        ax.set_xlabel('Energy Consumption (μJ/op) [N/A su Mac/WSL]')
-
-    ax.set_title('Key Management Roadmap: Energy Consumption per Operation')
-    ax.grid(True, axis='x')
-    plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, 'key_management_energy.png'), dpi=300)
-    plt.close()
+        print("[SKIP] Grafico key_management_energy.png non generato: energia RAPL assente/N/A.")
     print(f"[OK] Grafici Key Management salvati in {PLOTS_DIR}/ (PNG 300 DPI)")
 
 # =========================================================================
@@ -465,9 +488,9 @@ def analyze_mlkem_breakdown():
             "Decapsulation": "#2ecc71"
         }
         labels_legend = {
-            "KeyGen": "KeyGen (Gateway PK/SK)",
-            "Encapsulation": "Encapsulation (Sonobuoy Edge)",
-            "Decapsulation": "Decapsulation (Gateway SS)"
+            "KeyGen": "KeyGen (Gateway)",
+            "Encapsulation": "Encapsulation (Sonobuoy)",
+            "Decapsulation": "Decapsulation (Gateway)"
         }
 
         for idx, ph in enumerate(phases_to_plot):
@@ -485,7 +508,7 @@ def analyze_mlkem_breakdown():
             ax.bar(x + offset, ph_data, width, yerr=ph_err, capsize=4,
                    label=labels_legend[ph], color=colors[ph], alpha=0.85)
 
-        ax.set_ylabel('Latency (μs, 95% CI)')
+        ax.set_ylabel('Latency (μs)')
         ax.set_title('ML-KEM Granular Breakdown: Gateway Phases vs Sonobuoy Encapsulation')
         ax.set_xticks(x)
         ax.set_xticklabels(variants_order)

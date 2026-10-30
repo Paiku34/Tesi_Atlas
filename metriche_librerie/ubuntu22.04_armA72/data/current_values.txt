@@ -1,0 +1,27 @@
+voltage = 5.20
+current baseline = 0.57 
+
+ascon 64 = {0.75, 0.74, 0.745}
+ascon 255 = {0.75, 0.74, 0.74}
+ascon 1024 = {0.75, 0.74, 0.74}
+
+aes openssl 64 = {0.75, 0.75, 0.75}
+aes openssl 255 = {0.75, 0.74, 0.74}
+aes openssl 1024 = {0.75, 0.74, 0.74}
+
+chacha libsodium 64 = {0.74, 0.73, 0.73}
+chacha libsodium 255 = {0.73, 0.73, 0.72}
+chacha libsodium 1024 = {0.75, 0.73, 0.72}
+
+chacha openssl 64 = {0.76, 0.75, 0.75}
+chacha opessl 255 = {0.77, 0.76, 0.75}
+chacha opesnssl 1024 = {0.78, 0.77, 0.77}
+
+
+PSK + KDF = {0.76, 0.75, 0.75}
+SYMM HAND = {0.76, 0.76, 0.75}
+ECDH = {0.73, 0.73, 0.72}
+
+MLKEM 512 = {0.77, 0.76, 0.76}
+MLKEM 768 = {0.77, 0.77, 0.76}
+MLKEM 1024 = {0.78, 0.77, 0.76}
