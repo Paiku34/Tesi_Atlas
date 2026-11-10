@@ -76,7 +76,7 @@ public:
 
 int main() {
     std::cout << "\n>>> BENCHMARK ISOLATO: OPENSSL <<<\n";
-    std::vector<size_t> packet_sizes = {32, 64, 128, 255, 512, 1024};
+    std::vector<size_t> packet_sizes = {8, 16, 32, 64, 128, 256, 512, 1024};
     
     AES256GCM_OpenSSL aes;
     ChaCha20Poly1305_OpenSSL chacha;

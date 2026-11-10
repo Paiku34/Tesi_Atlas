@@ -71,7 +71,7 @@ int main() {
     }
 
     std::cout << "\n>>> BENCHMARK ISOLATO: LIBSODIUM <<<\n";
-    std::vector<size_t> packet_sizes = {32, 64, 128, 255, 512, 1024};
+    std::vector<size_t> packet_sizes = {8, 16, 32, 64, 128, 256, 512, 1024};
 
     if (!crypto_aead_aes256gcm_is_available()) {
         std::cout << "\033[33m[WARNING] AES-NI non disponibile. AES-256-GCM libsodium saltato.\033[0m\n\n";

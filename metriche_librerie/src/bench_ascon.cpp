@@ -55,7 +55,7 @@ public:
 
 int main() {
     std::cout << "\n>>> BENCHMARK ISOLATO: ASCON-C (STAND-ALONE) <<<\n";
-    std::vector<size_t> packet_sizes = {32, 64, 128, 255, 512, 1024};
+    std::vector<size_t> packet_sizes = {8, 16, 32, 64, 128, 256, 512, 1024};
 
     AsconAEAD128_Real ascon;
     run_benchmark_isolated(&ascon, packet_sizes);

@@ -212,13 +212,13 @@ static const aead_algorithm_t s_aead_algorithms[] = {
 };
 
 void run_ascon_benchmark(void) {
-    const size_t packet_sizes[] = {32, 64, 128, 255, 512, 1024};
+    const size_t packet_sizes[] = {8, 16, 32, 64, 128, 256, 512, 1024};
     const size_t num_sizes = sizeof(packet_sizes) / sizeof(packet_sizes[0]);
     run_aead_benchmark(&s_aead_algorithms[0], packet_sizes, num_sizes, AEAD_BENCH_ITERATIONS);
 }
 
 void run_mbedtls_aead_benchmark(void) {
-    const size_t packet_sizes[] = {32, 64, 128, 255, 512, 1024};
+    const size_t packet_sizes[] = {8, 16, 32, 64, 128, 256, 512, 1024};
     const size_t num_sizes = sizeof(packet_sizes) / sizeof(packet_sizes[0]);
     run_aead_benchmark(&s_aead_algorithms[1], packet_sizes, num_sizes, AEAD_BENCH_ITERATIONS); /* AES-256-GCM */
     run_aead_benchmark(&s_aead_algorithms[2], packet_sizes, num_sizes, AEAD_BENCH_ITERATIONS); /* ChaCha20 */

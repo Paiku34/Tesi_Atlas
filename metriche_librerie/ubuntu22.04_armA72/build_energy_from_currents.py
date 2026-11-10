@@ -149,7 +149,7 @@ def compute_keymgmt_energy(cfg: CurrentConfig) -> pd.DataFrame:
     scheme_map = {
         "PSK + KDF (Libsodium)": "psk + kdf",
         "Symmetric Handshake": "symm hand",
-        "ECDH X25519 (Libsodium)": "ecdh",
+        "ECDH X25519 One-Way (PSK Auth)": "ecdh",
         "ML-KEM-512": "mlkem 512",
         "ML-KEM-768": "mlkem 768",
         "ML-KEM-1024": "mlkem 1024",

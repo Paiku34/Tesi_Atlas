@@ -201,7 +201,7 @@ def analyze_bulk_encryption():
     ax.set_xlabel('Payload Dimension (Bytes)')
     ax.set_ylabel('Latency per Packet (μs)')
     ax.set_title('Bulk Encryption Latency vs Packet Size')
-    ax.set_xticks([32, 64, 128, 255, 512, 1024])
+    ax.set_xticks([8, 16, 32, 64, 128, 256, 512, 1024])
     ax.grid(True)
     ax.legend(frameon=True)
     plt.tight_layout()
@@ -221,7 +221,7 @@ def analyze_bulk_encryption():
     ax.set_xlabel('Payload Dimension (Bytes)')
     ax.set_ylabel('Effective Throughput (MB/s)')
     ax.set_title('Symmetric AEAD Throughput Scaling across Packet Sizes')
-    ax.set_xticks([32, 64, 128, 255, 512, 1024])
+    ax.set_xticks([8, 16, 32, 64, 128, 256, 512, 1024])
     ax.grid(True)
     ax.legend(frameon=True)
     plt.tight_layout()
@@ -239,7 +239,7 @@ def analyze_bulk_encryption():
         ax.set_ylabel('Energy per Packet (μJ)')
         ax.set_xlabel('Payload Dimension (Bytes)')
         ax.set_title('Physical Energy Consumption per Packet (Intel RAPL)')
-        ax.set_xticks([32, 64, 128, 255, 512, 1024])
+        ax.set_xticks([8, 16, 32, 64, 128, 256, 512, 1024])
         ax.grid(True)
         ax.legend(frameon=True)
         plt.tight_layout()
@@ -273,7 +273,7 @@ def analyze_key_management():
     order = [
         "PSK + KDF (Libsodium)",
         "Symmetric Handshake",
-        "ECDH X25519 (Libsodium)",
+        "ECDH X25519 One-Way (PSK Auth)",
         "ML-KEM-512",
         "ML-KEM-768",
         "ML-KEM-1024"
@@ -416,7 +416,7 @@ def analyze_mlkem_breakdown():
     has_cycles = 'cycles' in df.columns
 
     variants_order = ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"]
-    phases_order = ["KeyGen", "Encapsulation", "Decapsulation", "Handshake_Total"]
+    phases_order = ["OneWay_Encapsulation"]
 
     results = []
 
@@ -442,7 +442,7 @@ def analyze_mlkem_breakdown():
                     energy_val = float(e_series.iloc[0])
                     energy_str = f"{energy_val:0.2f}"
 
-            role_desc = "Gateway (Server)" if ph in ["KeyGen", "Decapsulation"] else ("Sonobuoy (Edge)" if ph == "Encapsulation" else "Full Handshake")
+            role_desc = "Sonobuoy (Edge)" if ph == "OneWay_Encapsulation" else "Full Handshake"
 
             results.append({
                 'Variant': var,
@@ -475,41 +475,25 @@ def analyze_mlkem_breakdown():
     print(f"\n[OK] Tabella ML-KEM Breakdown salvata in: {summary_path}")
 
     # --- GRAFICO BREAKDOWN DELLE FASI (KeyGen vs Encaps vs Decaps) ---
-    plot_df = res_df[res_df['Phase'] != 'Handshake_Total']
+    plot_df = res_df[res_df['Phase'] == 'OneWay_Encapsulation']
     if not plot_df.empty:
         fig, ax = plt.subplots(figsize=(10, 6))
         x = np.arange(len(variants_order))
-        width = 0.25
-
-        phases_to_plot = ["KeyGen", "Encapsulation", "Decapsulation"]
-        colors = {
-            "KeyGen": "#3498db",
-            "Encapsulation": "#e67e22",
-            "Decapsulation": "#2ecc71"
-        }
-        labels_legend = {
-            "KeyGen": "KeyGen (Gateway)",
-            "Encapsulation": "Encapsulation (Sonobuoy)",
-            "Decapsulation": "Decapsulation (Gateway)"
-        }
-
-        for idx, ph in enumerate(phases_to_plot):
-            ph_data = [
-                plot_df[(plot_df['Variant'] == v) & (plot_df['Phase'] == ph)]['Mean Latency (us)'].values[0]
-                if not plot_df[(plot_df['Variant'] == v) & (plot_df['Phase'] == ph)].empty else 0.0
-                for v in variants_order
-            ]
-            ph_err = [
-                plot_df[(plot_df['Variant'] == v) & (plot_df['Phase'] == ph)]['CI95 (+/- us)'].values[0]
-                if not plot_df[(plot_df['Variant'] == v) & (plot_df['Phase'] == ph)].empty else 0.0
-                for v in variants_order
-            ]
-            offset = (idx - 1) * width
-            ax.bar(x + offset, ph_data, width, yerr=ph_err, capsize=4,
-                   label=labels_legend[ph], color=colors[ph], alpha=0.85)
+        ph_data = [
+            plot_df[plot_df['Variant'] == v]['Mean Latency (us)'].values[0]
+            if not plot_df[plot_df['Variant'] == v].empty else 0.0
+            for v in variants_order
+        ]
+        ph_err = [
+            plot_df[plot_df['Variant'] == v]['CI95 (+/- us)'].values[0]
+            if not plot_df[plot_df['Variant'] == v].empty else 0.0
+            for v in variants_order
+        ]
+        ax.bar(x, ph_data, 0.5, yerr=ph_err, capsize=4,
+               label='One-way Encapsulation (Sonobuoy)', color='#e67e22', alpha=0.85)
 
         ax.set_ylabel('Latency (μs)')
-        ax.set_title('ML-KEM Granular Breakdown: Gateway Phases vs Sonobuoy Encapsulation')
+        ax.set_title('ML-KEM One-Way Encapsulation on the Sonobuoy')
         ax.set_xticks(x)
         ax.set_xticklabels(variants_order)
         ax.legend(frameon=True)

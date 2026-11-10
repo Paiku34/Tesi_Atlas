@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iomanip>
 #include <cstring>
+#include <array>
 
 struct KeyMgmtResult {
     std::string scheme_name;
@@ -72,30 +73,30 @@ void benchmark_psk_kdf_libsodium(KeyMgmtResult& res, int iterations) {
 }
 
 // -----------------------------------------------------------------------------
-// 2. Symmetric 2-Way Handshake (Challenge-Response + Key Confirmation)
+// 2. Symmetric handshake (buoy-side challenge response)
 // -----------------------------------------------------------------------------
 void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
     res.scheme_name = "Symmetric Handshake";
-    res.paradigm = "Symmetric 2-Way Auth";
+    res.paradigm = "Symmetric Auth, Buoy Only";
     res.exchanged_bytes = 80;
 
     uint8_t psk[32];
     randombytes_buf(psk, sizeof(psk));
-    uint8_t nc[32], ns[32], tag[16], session_key[32];
+    uint8_t nc[32], ns[32], tag[crypto_auth_BYTES], session_key[32];
     uint8_t handshake_data[64];
     uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
 
+    // The Ground Station nonce is received before the measured buoy operation.
+    randombytes_buf(nc, sizeof(nc));
+
     // Warm-up
     for (int i = 0; i < 50; i++) {
-        randombytes_buf(nc, sizeof(nc));
         randombytes_buf(ns, sizeof(ns));
         memcpy(handshake_data, nc, 32);
         memcpy(handshake_data + 32, ns, 32);
         crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
-        if (crypto_auth_verify(tag, handshake_data, sizeof(handshake_data), psk) == 0) {
-            crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
-            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
-        }
+        crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
+        crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
         do_not_optimize_away(session_key);
     }
 
@@ -108,23 +109,15 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         auto t0 = std::chrono::high_resolution_clock::now();
-        // 1. Client genera Nonce client (32 B)
-        randombytes_buf(nc, sizeof(nc));
-        
-        // 2. Server genera Nonce server (32 B) e concatena i due nonce
+        // The GS nonce is already available; only the buoy-side response is measured.
         randombytes_buf(ns, sizeof(ns));
         memcpy(handshake_data, nc, 32);
         memcpy(handshake_data + 32, ns, 32);
 
-        // 3. Server calcola Tag MAC su (nc || ns) con la Master Key
+        // The buoy authenticates its response with the PSK.
         crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
-        
-        // 4. Client verifica Tag su (nc || ns)
-        if (crypto_auth_verify(tag, handshake_data, sizeof(handshake_data), psk) == 0) {
-            // 5. Entrambi derivano la chiave di sessione a 256 bit tramite HKDF (RFC 5869 - HMAC-SHA256)
-            crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
-            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
-        }
+        crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
+        crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
         do_not_optimize_away(session_key);
         auto t1 = std::chrono::high_resolution_clock::now();
 
@@ -147,26 +140,56 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
 }
 
 // -----------------------------------------------------------------------------
-// 3. ECC X25519 (ECDH - Libsodium Key Exchange crypto_kx)
+// 3. One-way authenticated X25519 (buoy side only)
 // -----------------------------------------------------------------------------
 void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
-    res.scheme_name = "ECDH X25519 (Libsodium)";
-    res.paradigm = "Classical (ECC)";
-    res.exchanged_bytes = crypto_kx_PUBLICKEYBYTES * 2; // 32 B client pk + 32 B server pk = 64 bytes
+    constexpr size_t PSK_TAG_BYTES = 16;
+    res.scheme_name = "ECDH X25519 One-Way (PSK Auth)";
+    res.paradigm = "Classical ECC, Buoy Only";
+    // GS challenge (32 B nonce + 16 B tag) + buoy response
+    // (32 B nonce + 32 B ephemeral public key + 16 B tag).
+    res.exchanged_bytes = 32 + PSK_TAG_BYTES + 32 + 32 + PSK_TAG_BYTES;
 
-    uint8_t client_pk[crypto_kx_PUBLICKEYBYTES];
-    uint8_t client_sk[crypto_kx_SECRETKEYBYTES];
-    uint8_t server_pk[crypto_kx_PUBLICKEYBYTES];
-    uint8_t server_sk[crypto_kx_SECRETKEYBYTES];
+    uint8_t psk[crypto_auth_KEYBYTES];
+    uint8_t gs_pk[crypto_kx_PUBLICKEYBYTES];
+    uint8_t buoy_pk[crypto_kx_PUBLICKEYBYTES];
+    uint8_t buoy_sk[crypto_kx_SECRETKEYBYTES];
     uint8_t session_key[crypto_kx_SESSIONKEYBYTES];
+    uint8_t response_data[32 + 32 + crypto_kx_PUBLICKEYBYTES];
+    uint8_t response_tag[crypto_auth_BYTES];
 
-    // Warm-up completo (KeyGen + Derivazione singola chiave di sessione)
-    for (int i = 0; i < 20; i++) {
-        crypto_kx_keypair(client_pk, client_sk);
-        crypto_kx_keypair(server_pk, server_sk);
-        if (crypto_kx_client_session_keys(session_key, NULL, client_pk, client_sk, server_pk) == 0) {
-            do_not_optimize_away(session_key);
+    randombytes_buf(psk, sizeof(psk));
+    // In deployment this public key is provisioned in the buoy. Key generation
+    // is deliberately outside the measured operation because it belongs to GS setup.
+    uint8_t gs_sk[crypto_kx_SECRETKEYBYTES];
+    crypto_kx_keypair(gs_pk, gs_sk);
+
+    std::vector<std::array<uint8_t, 32>> gs_nonces(iterations);
+    for (int i = 0; i < iterations; i++) {
+        randombytes_buf(gs_nonces[i].data(), gs_nonces[i].size());
+    }
+
+    auto run_one_way_operation = [&](int i) {
+        uint8_t buoy_nonce[32];
+        randombytes_buf(buoy_nonce, sizeof(buoy_nonce));
+        crypto_kx_keypair(buoy_pk, buoy_sk);
+        if (crypto_kx_client_session_keys(
+                session_key, nullptr, buoy_pk, buoy_sk, gs_pk) != 0) {
+            return;
         }
+
+        memcpy(response_data, gs_nonces[i].data(), 32);
+        memcpy(response_data + 32, buoy_nonce, 32);
+        memcpy(response_data + 64, buoy_pk, sizeof(buoy_pk));
+        crypto_auth(response_tag, response_data, sizeof(response_data), psk);
+
+        do_not_optimize_away(response_tag);
+        do_not_optimize_away(session_key);
+    };
+
+    // Warm-up: only the buoy-side operation is included.
+    for (int i = 0; i < 20; i++) {
+        run_one_way_operation(i % iterations);
     }
 
     res.sample_times_us.clear();
@@ -178,16 +201,7 @@ void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
 
     for (int i = 0; i < iterations; i++) {
         auto t0 = std::chrono::high_resolution_clock::now();
-        // Client KeyGen
-        crypto_kx_keypair(client_pk, client_sk);
-
-        // Server KeyGen
-        crypto_kx_keypair(server_pk, server_sk);
-
-        // Derivazione singola chiave di sessione (lato Client)
-        if (crypto_kx_client_session_keys(session_key, NULL, client_pk, client_sk, server_pk) == 0) {
-            do_not_optimize_away(session_key);
-        }
+        run_one_way_operation(i);
         auto t1 = std::chrono::high_resolution_clock::now();
 
         double s_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
@@ -238,7 +252,7 @@ int main() {
     }
 
     std::cout << "\n======================================================================================================\n";
-    std::cout << " BENCHMARK: KEY MANAGEMENT ROADMAP (PSK -> Symmetric Handshake -> ECC X25519)\n";
+    std::cout << " BENCHMARK: KEY MANAGEMENT ROADMAP (PSK -> Symmetric Handshake -> ONE-WAY ECC)\n";
     std::cout << " Tesi: Secure Sonobuoy Telemetry (Edge Pre-Quantum Baseline)\n";
     std::cout << "======================================================================================================\n";
 

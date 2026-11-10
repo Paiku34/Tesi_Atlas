@@ -6,7 +6,7 @@
  *
  * Schemi implementati in C puro con mbed TLS:
  *   1. PSK + KDF (HKDF-SHA256 locale, zero byte trasmessi via radio)
- *   2. Symmetric 2-Way Handshake (Challenge-Response HMAC-SHA256 + HKDF, 80 byte)
+ *   2. Symmetric handshake (buoy-side response HMAC-SHA256 + HKDF, 80 byte)
  *   3. ECC X25519 (ECDH Curve25519, 64 byte scambiati)
  * =========================================================================== */
 
@@ -70,11 +70,11 @@ static void bench_psk_kdf(km_summary_t *res) {
 }
 
 /* =============================================================================
- * 2. Symmetric 2-Way Handshake (HMAC-SHA256 + HKDF via mbed TLS)
+ * 2. Symmetric handshake (buoy-side HMAC-SHA256 + HKDF via mbed TLS)
  * =========================================================================== */
 static void bench_symmetric_handshake(km_summary_t *res) {
     res->scheme_name = "Symmetric Handshake";
-    res->paradigm = "Symmetric 2-Way Auth";
+    res->paradigm = "Symmetric Auth, Buoy Only";
     res->exchanged_bytes = 80; /* 32B nc + 32B ns + 16B tag */
 
     uint8_t psk[32];
@@ -86,9 +86,11 @@ static void bench_symmetric_handshake(km_summary_t *res) {
 
     const mbedtls_md_info_t *md_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
 
+    /* The Ground Station nonce is received before the measured operation. */
+    rng_fill(nc, 32);
+
     /* Warm-up */
     for (int i = 0; i < 50; i++) {
-        rng_fill(nc, 32);
         rng_fill(ns, 32);
         memcpy(handshake_data, nc, 32);
         memcpy(handshake_data + 32, ns, 32);
@@ -102,18 +104,15 @@ static void bench_symmetric_handshake(km_summary_t *res) {
     uint32_t c0 = hal_read_cycles();
 
     for (int i = 0; i < KM_ITERATIONS; i++) {
-        /* 1. Client genera Nonce nc (32B) */
-        rng_fill(nc, 32);
-        /* 2. Server genera Nonce ns (32B) */
+        /* The GS nonce is already available; measure only the buoy response. */
         rng_fill(ns, 32);
         memcpy(handshake_data, nc, 32);
         memcpy(handshake_data + 32, ns, 32);
 
-        /* 3. Server calcola HMAC su (nc || ns) con la Master Key */
+        /* The buoy authenticates its response with the PSK. */
         mbedtls_md_hmac(md_info, psk, 32, handshake_data, 64, tag);
 
-        /* 4. Client verifica tag (qui simulato con costante temporale) */
-        /* 5. Entrambi derivano chiave tramite HKDF */
+        /* Derive the session key on the buoy side. */
         mbedtls_hkdf_extract(md_info, handshake_data, sizeof(handshake_data), psk, sizeof(psk), prk);
         mbedtls_hkdf_expand(md_info, prk, 32, (const unsigned char *)"ATLAS_SH", 8, session_key, 32);
         DO_NOT_OPTIMIZE_AWAY(session_key[0]);
@@ -193,7 +192,7 @@ static void bench_psk_kdf(km_summary_t *res) {
 }
 static void bench_symmetric_handshake(km_summary_t *res) {
     res->scheme_name = "Symmetric Handshake";
-    res->paradigm = "Symmetric 2-Way Auth";
+    res->paradigm = "Symmetric Auth, Buoy Only";
     res->exchanged_bytes = 80;
     printf("[KM] Handshake: TO BE IMPLEMENTED / mbed TLS non ancora linkata\r\n");
 }

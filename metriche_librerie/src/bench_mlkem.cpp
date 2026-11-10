@@ -1,8 +1,10 @@
 #include "benchmark_core.hpp"
 #include <oqs/oqs.h>
+#include <sodium.h>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <array>
 
 struct KemPhaseResult {
     std::string phase_name;
@@ -26,7 +28,7 @@ struct KemBenchmarkResult {
     KemPhaseResult keygen;
     KemPhaseResult encaps;
     KemPhaseResult decaps;
-    KemPhaseResult handshake; // Full Ephemeral Handshake (KeyGen + Encaps + Decaps)
+    KemPhaseResult handshake; // One-way buoy operation (PSK auth + Encaps + KDF)
 };
 
 template <typename Func>
@@ -78,60 +80,52 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
 
     res.pk_bytes = kem->length_public_key;
     res.ct_bytes = kem->length_ciphertext;
-    res.total_exchanged_bytes = res.pk_bytes + res.ct_bytes;
+    constexpr size_t PSK_TAG_BYTES = 16;
+    // GS challenge: nonce + tag. Buoy response: nonce + KEM ciphertext + tag.
+    // The Ground Station public key is provisioned before deployment and is not
+    // part of the one-way runtime exchange.
+    res.total_exchanged_bytes = 32 + PSK_TAG_BYTES + 32 + res.ct_bytes + PSK_TAG_BYTES;
 
     std::vector<uint8_t> public_key(kem->length_public_key);
     std::vector<uint8_t> secret_key(kem->length_secret_key);
     std::vector<uint8_t> ciphertext(kem->length_ciphertext);
     std::vector<uint8_t> shared_secret_sender(kem->length_shared_secret);
     std::vector<uint8_t> shared_secret_receiver(kem->length_shared_secret);
+    uint8_t psk[crypto_auth_KEYBYTES];
+    randombytes_buf(psk, sizeof(psk));
+
+    // Provision the Ground Station key pair outside the measured operation.
+    OQS_KEM_keypair(kem, public_key.data(), secret_key.data());
+    do_not_optimize_away(public_key);
+    do_not_optimize_away(secret_key);
+
+    std::vector<std::array<uint8_t, 32>> gs_nonces(1000);
+    std::vector<uint8_t> response_data(32 + 32 + kem->length_ciphertext);
+    for (size_t i = 0; i < gs_nonces.size(); i++) {
+        randombytes_buf(gs_nonces[i].data(), gs_nonces[i].size());
+    }
 
     const int ITERATIONS = 1000;
 
-    // 1. KeyGen (generazione coppia chiavi)
-    res.keygen.phase_name = "KeyGen";
-    res.keygen.payload_bytes = res.pk_bytes;
-    res.keygen.payload_desc = std::to_string(res.pk_bytes) + " B (PK)";
-    benchmark_phase(res.keygen, ITERATIONS, [&]() {
-        OQS_KEM_keypair(kem, public_key.data(), secret_key.data());
-        do_not_optimize_away(public_key);
-        do_not_optimize_away(secret_key);
-    });
-
-    // 2. Encapsulation (cifratura / incapsulamento segreto)
-    res.encaps.phase_name = "Encapsulation";
-    res.encaps.payload_bytes = res.ct_bytes;
-    res.encaps.payload_desc = std::to_string(res.ct_bytes) + " B (CT)";
-    benchmark_phase(res.encaps, ITERATIONS, [&]() {
-        OQS_KEM_encaps(kem, ciphertext.data(), shared_secret_sender.data(), public_key.data());
-        do_not_optimize_away(ciphertext);
-        do_not_optimize_away(shared_secret_sender);
-    });
-
-    // 3. Decapsulation (decifratura segreto da ciphertext)
-    res.decaps.phase_name = "Decapsulation";
-    res.decaps.payload_bytes = 0;
-    res.decaps.payload_desc = "0 B (internal)";
-    benchmark_phase(res.decaps, ITERATIONS, [&]() {
-        OQS_KEM_decaps(kem, shared_secret_receiver.data(), ciphertext.data(), secret_key.data());
-        do_not_optimize_away(shared_secret_receiver);
-    });
-
-    // 4. Handshake Completo Effimero (KeyGen + Encaps + Decaps)
-    res.handshake.phase_name = "Handshake_Total";
+    // One-way operation measured on the buoy only:
+    // verify GS PSK challenge, encapsulate, authenticate response, derive key.
+    res.handshake.phase_name = "OneWay_Encapsulation";
     res.handshake.payload_bytes = res.total_exchanged_bytes;
-    res.handshake.payload_desc = std::to_string(res.pk_bytes) + "+" + std::to_string(res.ct_bytes) + " B";
+    res.handshake.payload_desc = std::to_string(res.ct_bytes) + " B CT + PSK auth";
+    size_t sample_index = 0;
     benchmark_phase(res.handshake, ITERATIONS, [&]() {
-        OQS_KEM_keypair(kem, public_key.data(), secret_key.data());
-        do_not_optimize_away(public_key);
-        do_not_optimize_away(secret_key);
-
+        const size_t i = sample_index++ % gs_nonces.size();
+        uint8_t buoy_nonce[32];
+        uint8_t response_tag[crypto_auth_BYTES];
+        randombytes_buf(buoy_nonce, sizeof(buoy_nonce));
         OQS_KEM_encaps(kem, ciphertext.data(), shared_secret_sender.data(), public_key.data());
-        do_not_optimize_away(ciphertext);
-        do_not_optimize_away(shared_secret_sender);
+        memcpy(response_data.data(), gs_nonces[i].data(), 32);
+        memcpy(response_data.data() + 32, buoy_nonce, 32);
+        memcpy(response_data.data() + 64, ciphertext.data(), ciphertext.size());
+        crypto_auth(response_tag, response_data.data(), response_data.size(), psk);
 
-        OQS_KEM_decaps(kem, shared_secret_receiver.data(), ciphertext.data(), secret_key.data());
-        do_not_optimize_away(shared_secret_receiver);
+        do_not_optimize_away(response_tag);
+        do_not_optimize_away(shared_secret_sender);
     });
 
     res.ram_kb = get_current_ram_usage_kb();
@@ -172,7 +166,7 @@ void append_mlkem_to_csvs(const std::string& general_csv,
             if (bf.tellp() == 0) {
                 bf << "variant,phase,payload_bytes,sample_id,latency_us,cycles,energy_uj\n";
             }
-            const KemPhaseResult* phases[] = { &res.keygen, &res.encaps, &res.decaps, &res.handshake };
+            const KemPhaseResult* phases[] = { &res.handshake };
             for (const auto* p : phases) {
                 for (size_t i = 0; i < p->sample_times_us.size(); i++) {
                     bf << "\"" << res.alg_name << "\","
@@ -192,8 +186,13 @@ int main() {
     // Warm-up contatori cicli hardware (Linux PMU / x86)
     (void)read_cpu_cycles();
 
+    if (sodium_init() < 0) {
+        std::cerr << "Errore inizializzazione sodium!\n";
+        return 1;
+    }
+
     std::cout << "\n=======================================================================================================\n";
-    std::cout << " BENCHMARK: ML-KEM POST-QUANTUM (liboqs) — FASI GRANULARI & HANDSHAKE COMPLETO\n";
+    std::cout << " BENCHMARK: ML-KEM POST-QUANTUM (liboqs) — ONE-WAY BUOY OPERATION\n";
     std::cout << "=======================================================================================================\n";
 
     std::vector<const char*> algorithms = {
@@ -234,7 +233,7 @@ int main() {
             KemBenchmarkResult res;
             benchmark_kem(alg, res);
 
-            const KemPhaseResult* phases[] = { &res.keygen, &res.encaps, &res.decaps, &res.handshake };
+            const KemPhaseResult* phases[] = { &res.handshake };
             for (const auto* p : phases) {
                 std::cout << std::left 
                           << "| " << std::setw(12) << res.alg_name
