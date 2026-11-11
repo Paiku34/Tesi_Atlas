@@ -5,68 +5,24 @@
 #include <iomanip>
 #include <sstream>
 
-struct KemMeasurement {
-    std::string phase_name;
-    size_t payload_bytes = 0;
-    std::string payload_desc;
+struct KeyMgmtResult {
+    std::string scheme_name;
+    std::string paradigm;
+    size_t exchanged_bytes = 0;
 
-    double mean_us = 0.0;
-    unsigned long long cycles = 0;
+    double total_us = 0.0;
+    unsigned long long total_cycles = 0;
+
     double energy_uj = -1.0;
-    std::string energy_uj_str = "N/A";
+    long ram_kb = 0;
+
+    // Per analisi statistica e confidenza
     std::vector<double> sample_times_us;
 };
 
-struct KemBenchmarkResult {
-    std::string alg_name;
-    size_t pk_bytes = 0;
-    size_t ct_bytes = 0;
-    size_t total_exchanged_bytes = 0;
-    long ram_kb = 0;
-
-    KemMeasurement one_way; // PSK auth + Encaps + KDF on the buoy
-};
-
-template <typename Func>
-void measure_one_way_kem(KemMeasurement& pr, int iterations, Func&& func) {
-    // Warm-up
-    for (int i = 0; i < KEY_MGMT_WARMUP_ITERATIONS; i++) {
-        func();
-    }
-
-    pr.sample_times_us.clear();
-    pr.sample_times_us.reserve(iterations);
-
-    long long energy_start = read_intel_rapl_uj();
-
-    unsigned long long c0 = read_cpu_cycles();
-
-    for (int i = 0; i < iterations; i++) {
-        auto t0 = std::chrono::high_resolution_clock::now();
-        func();
-        auto t1 = std::chrono::high_resolution_clock::now();
-        double sample_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
-        pr.sample_times_us.push_back(sample_us);
-    }
-
-    unsigned long long c1 = read_cpu_cycles();
-    pr.cycles = (c1 >= c0) ? ((c1 - c0) / iterations) : 0;
-
-    long long energy_end = read_intel_rapl_uj();
-    if (energy_start != -1 && energy_end >= energy_start) {
-        pr.energy_uj = (double)(energy_end - energy_start) / iterations;
-        std::stringstream ss;
-        ss << std::fixed << std::setprecision(2) << pr.energy_uj;
-        pr.energy_uj_str = ss.str();
-    }
-
-    double sum = 0.0;
-    for (double v : pr.sample_times_us) sum += v;
-    pr.mean_us = sum / iterations;
-}
-
-void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
-    res.alg_name = alg_name;
+void benchmark_kem(const char* alg_name, KeyMgmtResult& res) {
+    res.scheme_name = alg_name;
+    res.paradigm = "Lattice (PQC)";
     
     OQS_KEM *kem = OQS_KEM_new(alg_name);
     if (!kem) {
@@ -74,13 +30,11 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
         return;
     }
 
-    res.pk_bytes = kem->length_public_key;
-    res.ct_bytes = kem->length_ciphertext;
     constexpr size_t PSK_TAG_BYTES = 16;
     // GS challenge: nonce + tag. Buoy response: nonce + KEM ciphertext + tag.
     // The Ground Station public key is provisioned before deployment and is not
     // part of the one-way runtime exchange.
-    res.total_exchanged_bytes = 32 + PSK_TAG_BYTES + 32 + res.ct_bytes + PSK_TAG_BYTES;
+    res.exchanged_bytes = 32 + PSK_TAG_BYTES + 32 + kem->length_ciphertext + PSK_TAG_BYTES;
 
     std::vector<uint8_t> public_key(kem->length_public_key);
     std::vector<uint8_t> secret_key(kem->length_secret_key);
@@ -107,10 +61,7 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
 
     // One-way operation measured on the buoy only:
     // verify GS PSK challenge, encapsulate, authenticate response, derive key.
-    res.one_way.phase_name = "OneWay_Encapsulation";
-    res.one_way.payload_bytes = res.total_exchanged_bytes;
-    res.one_way.payload_desc = std::to_string(res.ct_bytes) + " B CT + PSK auth";
-    measure_one_way_kem(res.one_way, ITERATIONS, [&]() {
+    KeyMgmtMeasurement measurement = measure_key_management([&]() {
         uint8_t buoy_nonce[32];
         uint8_t response_tag[crypto_auth_BYTES];
         uint8_t expected_tag[crypto_auth_BYTES];
@@ -135,33 +86,35 @@ void benchmark_kem(const char* alg_name, KemBenchmarkResult& res) {
             session_key, sizeof(session_key), "ATLAS_MLKEM", 12, prk);
         do_not_optimize_away(response_tag);
         do_not_optimize_away(session_key);
-    });
+    }, ITERATIONS);
 
+    res.sample_times_us = std::move(measurement.sample_times_us);
+    res.total_us = measurement.mean_us;
+    res.total_cycles = measurement.cycles_per_op;
+    res.energy_uj = measurement.energy_uj;
     res.ram_kb = get_current_ram_usage_kb();
 
     OQS_KEM_free(kem);
 }
 
 void append_mlkem_to_csv(const std::string& general_csv,
-                         const KemBenchmarkResult& res) {
-    {
-        std::ofstream gf(general_csv, std::ios::app);
-        if (gf.is_open()) {
-            gf.seekp(0, std::ios::end);
-            if (gf.tellp() == 0) {
-                gf << "category,scheme,paradigm,exchanged_bytes,sample_id,latency_us,cycles,energy_uj,ram_kb\n";
-            }
-            for (size_t i = 0; i < res.one_way.sample_times_us.size(); i++) {
-                gf << "key_management,"
-                   << "\"" << res.alg_name << "\","
-                   << "\"Lattice (PQC)\","
-                   << res.total_exchanged_bytes << ","
-                   << i + 1 << ","
-                   << std::fixed << std::setprecision(4) << res.one_way.sample_times_us[i] << ","
-                   << res.one_way.cycles << ","
-                   << std::fixed << std::setprecision(3) << res.one_way.energy_uj << ","
-                   << res.ram_kb << "\n";
-            }
+                         const KeyMgmtResult& res) {
+    std::ofstream gf(general_csv, std::ios::app);
+    if (gf.is_open()) {
+        gf.seekp(0, std::ios::end);
+        if (gf.tellp() == 0) {
+            gf << "category,scheme,paradigm,exchanged_bytes,sample_id,latency_us,cycles,energy_uj,ram_kb\n";
+        }
+        for (size_t i = 0; i < res.sample_times_us.size(); i++) {
+            gf << "key_management,"
+               << "\"" << res.scheme_name << "\","
+               << "\"" << res.paradigm << "\","
+               << res.exchanged_bytes << ","
+               << i + 1 << ","
+               << std::fixed << std::setprecision(4) << res.sample_times_us[i] << ","
+               << res.total_cycles << ","
+               << std::fixed << std::setprecision(3) << res.energy_uj << ","
+               << res.ram_kb << "\n";
         }
     }
 }
@@ -186,19 +139,19 @@ int main() {
     };
 
     std::cout << std::left 
-              << "| " << std::setw(12) << "Variante"
-              << "| " << std::setw(17) << "Fase"
-              << "| " << std::setw(18) << "Payload"
-              << "| " << std::setw(12) << "Tempo(us)"
-              << "| " << std::setw(12) << "Cicli/Op"
-              << "| " << std::setw(12) << "Energia(uJ)"
+              << "| " << std::setw(14) << "Schema"
+              << "| " << std::setw(18) << "Paradigma"
+              << "| " << std::setw(14) << "Payload (B)"
+              << "| " << std::setw(14) << "Tempo (us)"
+              << "| " << std::setw(14) << "Cicli/Op"
+              << "| " << std::setw(14) << "Energia (uJ)"
               << "|\n";
-    std::cout << "|" << std::string(13, '-')
-              << "|" << std::string(18, '-')
+    std::cout << "|" << std::string(15, '-')
               << "|" << std::string(19, '-')
-              << "|" << std::string(13, '-')
-              << "|" << std::string(13, '-')
-              << "|" << std::string(13, '-')
+              << "|" << std::string(15, '-')
+              << "|" << std::string(15, '-')
+              << "|" << std::string(15, '-')
+              << "|" << std::string(15, '-')
               << "|\n";
 
     std::string general_csv = get_data_dir() + "key_management_raw.csv";
@@ -206,27 +159,27 @@ int main() {
         std::cout.flush();
         pid_t pid = fork();
         if (pid == 0) {
-            KemBenchmarkResult res;
+            KeyMgmtResult res;
             benchmark_kem(alg, res);
 
-            const auto& measurement = res.one_way;
-            std::cout << std::left
-                      << "| " << std::setw(12) << res.alg_name
-                      << "| " << std::setw(17) << measurement.phase_name
-                      << "| " << std::setw(18) << measurement.payload_desc
-                      << "| " << std::fixed << std::setprecision(2) << std::setw(12) << measurement.mean_us
-                      << "| " << std::setw(12) << measurement.cycles
-                      << "| " << std::setw(12) << measurement.energy_uj_str
+            std::string energy_str = (res.energy_uj > 0) ? std::to_string(res.energy_uj) : "N/A";
+            std::cout << std::left 
+                      << "| " << std::setw(14) << res.scheme_name
+                      << "| " << std::setw(18) << res.paradigm
+                      << "| " << std::setw(14) << res.exchanged_bytes
+                      << "| " << std::fixed << std::setprecision(2) << std::setw(14) << res.total_us
+                      << "| " << std::setw(14) << res.total_cycles
+                      << "| " << std::setw(14) << energy_str
                       << "|\n";
-            std::cout << "| " << std::setw(12) << res.alg_name 
+            std::cout << "| " << std::setw(14) << res.scheme_name 
                       << "  [Memoria di Processo Peak RSS: " << res.ram_kb << " KB]\n";
-            std::cout << "|" << std::string(13, '-')
-                      << "|" << std::string(18, '-')
-                      << "|" << std::string(19, '-')
-                      << "|" << std::string(13, '-')
-                      << "|" << std::string(13, '-')
-                      << "|" << std::string(13, '-')
-                      << "|\n";
+            std::cout << "|" << std::string(15, '-')
+              << "|" << std::string(19, '-')
+              << "|" << std::string(15, '-')
+              << "|" << std::string(15, '-')
+              << "|" << std::string(15, '-')
+              << "|" << std::string(15, '-')
+              << "|\n";
             std::cout.flush();
 
             append_mlkem_to_csv(general_csv, res);
