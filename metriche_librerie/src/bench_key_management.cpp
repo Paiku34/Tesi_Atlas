@@ -4,7 +4,6 @@
 #include <fstream>
 #include <iomanip>
 #include <cstring>
-#include <array>
 
 struct KeyMgmtResult {
     std::string scheme_name;
@@ -33,42 +32,16 @@ void benchmark_psk_kdf_libsodium(KeyMgmtResult& res, int iterations) {
     randombytes_buf(psk, sizeof(psk));
     uint8_t session_key[32];
 
-    // Warm-up
-    for (int i = 0; i < 50; i++) {
-        crypto_kdf_derive_from_key(session_key, sizeof(session_key), (uint64_t)i, "ATLAS_KM", psk);
-        do_not_optimize_away(session_key);
-    }
-
-    res.sample_times_us.clear();
-    res.sample_times_us.reserve(iterations);
-
-    long long energy_start = read_intel_rapl_uj();
-
-    unsigned long long c0 = read_cpu_cycles();
-
-    for (int i = 0; i < iterations; i++) {
-        uint64_t subkey_id = (uint64_t)i;
-        
-        auto t0 = std::chrono::high_resolution_clock::now();
+    uint64_t operation_counter = 0;
+    KeyMgmtMeasurement measurement = measure_key_management([&]() {
+        uint64_t subkey_id = operation_counter++;
         crypto_kdf_derive_from_key(session_key, sizeof(session_key), subkey_id, "ATLAS_KM", psk);
         do_not_optimize_away(session_key);
-        auto t1 = std::chrono::high_resolution_clock::now();
-
-        double s_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
-        res.sample_times_us.push_back(s_us);
-    }
-
-    unsigned long long c1 = read_cpu_cycles();
-    res.total_cycles = (c1 >= c0) ? ((c1 - c0) / iterations) : 0;
-
-    long long energy_end = read_intel_rapl_uj();
-    if (energy_start != -1 && energy_end >= energy_start) {
-        res.energy_uj = (double)(energy_end - energy_start) / iterations;
-    }
-
-    double sum = 0.0;
-    for (double v : res.sample_times_us) sum += v;
-    res.total_us = sum / iterations;
+    }, iterations);
+    res.sample_times_us = std::move(measurement.sample_times_us);
+    res.total_us = measurement.mean_us;
+    res.total_cycles = measurement.cycles_per_op;
+    res.energy_uj = measurement.energy_uj;
     res.ram_kb = get_current_ram_usage_kb();
 }
 
@@ -82,60 +55,38 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
 
     uint8_t psk[32];
     randombytes_buf(psk, sizeof(psk));
+    constexpr size_t PSK_TAG_BYTES = 16;
     uint8_t nc[32], ns[32], tag[crypto_auth_BYTES], session_key[32];
     uint8_t handshake_data[64];
     uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
 
-    // The Ground Station nonce is received before the measured buoy operation.
+    // The Ground Station nonce and authentication tag are received before the
+    // measured buoy operation. Their generation is not part of this benchmark.
     randombytes_buf(nc, sizeof(nc));
+    memcpy(handshake_data, nc, sizeof(nc));
+    memset(handshake_data + sizeof(nc), 0, sizeof(ns));
+    crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
+    uint8_t gs_tag[crypto_auth_BYTES];
+    memcpy(gs_tag, tag, sizeof(gs_tag));
 
-    // Warm-up
-    for (int i = 0; i < 50; i++) {
-        randombytes_buf(ns, sizeof(ns));
-        memcpy(handshake_data, nc, 32);
-        memcpy(handshake_data + 32, ns, 32);
-        crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
-        crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
-        crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
-        do_not_optimize_away(session_key);
-    }
-
-    res.sample_times_us.clear();
-    res.sample_times_us.reserve(iterations);
-
-    long long energy_start = read_intel_rapl_uj();
-
-    unsigned long long c0 = read_cpu_cycles();
-
-    for (int i = 0; i < iterations; i++) {
-        auto t0 = std::chrono::high_resolution_clock::now();
-        // The GS nonce is already available; only the buoy-side response is measured.
-        randombytes_buf(ns, sizeof(ns));
-        memcpy(handshake_data, nc, 32);
-        memcpy(handshake_data + 32, ns, 32);
-
-        // The buoy authenticates its response with the PSK.
-        crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
-        crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
-        crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
-        do_not_optimize_away(session_key);
-        auto t1 = std::chrono::high_resolution_clock::now();
-
-        double s_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
-        res.sample_times_us.push_back(s_us);
-    }
-
-    unsigned long long c1 = read_cpu_cycles();
-    res.total_cycles = (c1 >= c0) ? ((c1 - c0) / iterations) : 0;
-
-    long long energy_end = read_intel_rapl_uj();
-    if (energy_start != -1 && energy_end >= energy_start) {
-        res.energy_uj = (double)(energy_end - energy_start) / iterations;
-    }
-
-    double sum = 0.0;
-    for (double v : res.sample_times_us) sum += v;
-    res.total_us = sum / iterations;
+    KeyMgmtMeasurement measurement = measure_key_management([&]() {
+        memcpy(handshake_data, nc, sizeof(nc));
+        memset(handshake_data + sizeof(nc), 0, sizeof(ns));
+        uint8_t expected_gs_tag[crypto_auth_BYTES];
+        crypto_auth(expected_gs_tag, handshake_data, sizeof(handshake_data), psk);
+        if (sodium_memcmp(gs_tag, expected_gs_tag, PSK_TAG_BYTES) == 0) {
+            randombytes_buf(ns, sizeof(ns));
+            memcpy(handshake_data + 32, ns, 32);
+            crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
+            crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
+            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
+            do_not_optimize_away(session_key);
+        }
+    }, iterations);
+    res.sample_times_us = std::move(measurement.sample_times_us);
+    res.total_us = measurement.mean_us;
+    res.total_cycles = measurement.cycles_per_op;
+    res.energy_uj = measurement.energy_uj;
     res.ram_kb = get_current_ram_usage_kb();
 }
 
@@ -154,7 +105,9 @@ void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
     uint8_t gs_pk[crypto_kx_PUBLICKEYBYTES];
     uint8_t buoy_pk[crypto_kx_PUBLICKEYBYTES];
     uint8_t buoy_sk[crypto_kx_SECRETKEYBYTES];
-    uint8_t session_key[crypto_kx_SESSIONKEYBYTES];
+    uint8_t shared_secret[crypto_scalarmult_BYTES];
+    uint8_t session_key[32];
+    uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
     uint8_t response_data[32 + 32 + crypto_kx_PUBLICKEYBYTES];
     uint8_t response_tag[crypto_auth_BYTES];
 
@@ -164,61 +117,47 @@ void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
     uint8_t gs_sk[crypto_kx_SECRETKEYBYTES];
     crypto_kx_keypair(gs_pk, gs_sk);
 
-    std::vector<std::array<uint8_t, 32>> gs_nonces(iterations);
-    for (int i = 0; i < iterations; i++) {
-        randombytes_buf(gs_nonces[i].data(), gs_nonces[i].size());
-    }
+    uint8_t gs_nonce[32];
+    uint8_t gs_auth_data[32 + crypto_kx_PUBLICKEYBYTES];
+    uint8_t gs_tag[crypto_auth_BYTES];
+    randombytes_buf(gs_nonce, sizeof(gs_nonce));
+    memcpy(gs_auth_data, gs_nonce, sizeof(gs_nonce));
+    memcpy(gs_auth_data + sizeof(gs_nonce), gs_pk, sizeof(gs_pk));
+    crypto_auth(gs_tag, gs_auth_data, sizeof(gs_auth_data), psk);
 
-    auto run_one_way_operation = [&](int i) {
-        uint8_t buoy_nonce[32];
-        randombytes_buf(buoy_nonce, sizeof(buoy_nonce));
-        crypto_kx_keypair(buoy_pk, buoy_sk);
-        if (crypto_kx_client_session_keys(
-                session_key, nullptr, buoy_pk, buoy_sk, gs_pk) != 0) {
+    auto run_one_way_operation = [&]() {
+        uint8_t expected_tag[crypto_auth_BYTES];
+        crypto_auth(expected_tag, gs_auth_data, sizeof(gs_auth_data), psk);
+        if (sodium_memcmp(gs_tag, expected_tag, PSK_TAG_BYTES) != 0) {
             return;
         }
 
-        memcpy(response_data, gs_nonces[i].data(), 32);
+        uint8_t buoy_nonce[32];
+        randombytes_buf(buoy_nonce, sizeof(buoy_nonce));
+        crypto_kx_keypair(buoy_pk, buoy_sk);
+        if (crypto_scalarmult_curve25519(shared_secret, buoy_sk, gs_pk) != 0) {
+            return;
+        }
+
+        memcpy(response_data, gs_nonce, sizeof(gs_nonce));
         memcpy(response_data + 32, buoy_nonce, 32);
         memcpy(response_data + 64, buoy_pk, sizeof(buoy_pk));
         crypto_auth(response_tag, response_data, sizeof(response_data), psk);
+
+        crypto_kdf_hkdf_sha256_extract(
+            prk, psk, sizeof(psk), shared_secret, sizeof(shared_secret));
+        crypto_kdf_hkdf_sha256_expand(
+            session_key, sizeof(session_key), "ATLAS_ECDH", 11, prk);
 
         do_not_optimize_away(response_tag);
         do_not_optimize_away(session_key);
     };
 
-    // Warm-up: only the buoy-side operation is included.
-    for (int i = 0; i < 20; i++) {
-        run_one_way_operation(i % iterations);
-    }
-
-    res.sample_times_us.clear();
-    res.sample_times_us.reserve(iterations);
-
-    long long energy_start = read_intel_rapl_uj();
-
-    unsigned long long c0 = read_cpu_cycles();
-
-    for (int i = 0; i < iterations; i++) {
-        auto t0 = std::chrono::high_resolution_clock::now();
-        run_one_way_operation(i);
-        auto t1 = std::chrono::high_resolution_clock::now();
-
-        double s_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
-        res.sample_times_us.push_back(s_us);
-    }
-
-    unsigned long long c1 = read_cpu_cycles();
-    res.total_cycles = (c1 >= c0) ? ((c1 - c0) / iterations) : 0;
-
-    long long energy_end = read_intel_rapl_uj();
-    if (energy_start != -1 && energy_end >= energy_start) {
-        res.energy_uj = (double)(energy_end - energy_start) / iterations;
-    }
-
-    double sum = 0.0;
-    for (double v : res.sample_times_us) sum += v;
-    res.total_us = sum / iterations;
+    KeyMgmtMeasurement measurement = measure_key_management(run_one_way_operation, iterations);
+    res.sample_times_us = std::move(measurement.sample_times_us);
+    res.total_us = measurement.mean_us;
+    res.total_cycles = measurement.cycles_per_op;
+    res.energy_uj = measurement.energy_uj;
     res.ram_kb = get_current_ram_usage_kb();
 }
 
@@ -281,7 +220,7 @@ int main() {
               << "|" << std::string(10, '-')
               << "|\n";
 
-    const int ITERATIONS = 1000; // 1000 campioni singoli 1-a-1 senza batching
+    const int ITERATIONS = KEY_MGMT_MEASUREMENT_ITERATIONS;
 
     auto run_and_print = [&](auto bench_func) {
         pid_t pid = fork();

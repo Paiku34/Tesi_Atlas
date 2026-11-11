@@ -9,10 +9,13 @@ import csv
 # Directory del progetto
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BUILD_DIR = os.path.join(SCRIPT_DIR, "build")
+BENCHMARK_DATA_DIR = os.environ.get(
+    "ATLAS_BENCHMARK_DATA_DIR",
+    os.path.join(SCRIPT_DIR, "..", "ubuntu22.04_armA72", "data")
+)
 AEAD_BIN = os.path.join(BUILD_DIR, "bench_energia_aead")
 KM_BIN = os.path.join(BUILD_DIR, "bench_energia_keymgmt")
 CSV_OUTPUT = os.path.join(SCRIPT_DIR, "risultati_energia.csv")
-MD_OUTPUT = os.path.join(SCRIPT_DIR, "risultati_energia.md")
 
 # Colori terminale ANSI
 CYAN = "\033[96m"
@@ -22,11 +25,10 @@ RED = "\033[91m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
-PAYLOADS = [64, 255, 1024]
+PAYLOADS = [8, 16, 32, 64, 128, 256, 512, 1024]
 
 AEAD_TESTS = [
     ("ascon", "Ascon-AEAD128"),
-    ("aes128", "AES-128-GCM (OpenSSL)"),
     ("aes256", "AES-256-GCM (OpenSSL)"),
     ("chacha_sodium", "ChaCha20-Poly1305 (Libsodium)"),
     ("chacha_openssl", "ChaCha20-Poly1305 (OpenSSL)")
@@ -35,11 +37,27 @@ AEAD_TESTS = [
 KM_TESTS = [
     ("psk", "PSK + KDF (BLAKE2b)", 0),
     ("symm_handshake", "Symmetric Handshake (2-Way HKDF)", 80),
-    ("x25519", "ECDH X25519", 64),
-    ("mlkem512", "ML-KEM-512 (Kyber512)", 1568),
-    ("mlkem768", "ML-KEM-768 (Kyber768)", 2272),
-    ("mlkem1024", "ML-KEM-1024 (Kyber1024)", 3136)
+    ("x25519", "ECDH X25519 One-Way (PSK Auth)", 128),
+    ("mlkem512", "ML-KEM-512", 864),
+    ("mlkem768", "ML-KEM-768", 1184),
+    ("mlkem1024", "ML-KEM-1024", 1664)
 ]
+
+AEAD_REFERENCE_NAMES = {
+    "ascon": "Ascon-AEAD128",
+    "aes256": "AES-256-GCM",
+    "chacha_sodium": "ChaCha20-Poly1305 (Libsodium)",
+    "chacha_openssl": "ChaCha20-Poly1305 (OpenSSL)",
+}
+
+KM_REFERENCE_NAMES = {
+    "psk": "PSK + KDF (Libsodium)",
+    "symm_handshake": "Symmetric Handshake",
+    "x25519": "ECDH X25519 One-Way (PSK Auth)",
+    "mlkem512": "ML-KEM-512",
+    "mlkem768": "ML-KEM-768",
+    "mlkem1024": "ML-KEM-1024",
+}
 
 def check_build():
     if not os.path.exists(AEAD_BIN) or not os.path.exists(KM_BIN):
@@ -49,30 +67,26 @@ def check_build():
         subprocess.run(["cmake", "--build", BUILD_DIR, "-j4"], check=True)
         print(f"{GREEN}[OK] Compilazione completata con successo.{RESET}\n")
 
-def get_latency_aead(algo_id, payload):
-    try:
-        res = subprocess.run([AEAD_BIN, "--latency", algo_id, str(payload)],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        for line in res.stdout.splitlines():
-            if line.startswith("LATENCY_RESULT|"):
-                parts = line.strip().split("|")
-                # parts: ['LATENCY_RESULT', algo_id, name, payload, mean_us, std_us, cycles]
-                return float(parts[4]), float(parts[5]), int(parts[6])
-    except Exception as e:
-        print(f"{RED}[ERRORE] Calcolo latenza AEAD fallito: {e}{RESET}")
-    return 0.0, 0.0, 0
+def load_reference_rows(filename):
+    path = os.path.join(BENCHMARK_DATA_DIR, filename)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Summary benchmark non trovato: {path}. "
+            "Esegui prima il benchmark computazionale."
+        )
+    with open(path, newline="") as handle:
+        return list(csv.DictReader(handle))
 
-def get_latency_km(scheme_id):
-    try:
-        res = subprocess.run([KM_BIN, "--latency", scheme_id],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        for line in res.stdout.splitlines():
-            if line.startswith("LATENCY_RESULT|"):
-                parts = line.strip().split("|")
-                return float(parts[4]), float(parts[5]), int(parts[6])
-    except Exception as e:
-        print(f"{RED}[ERRORE] Calcolo latenza Key Management fallito: {e}{RESET}")
-    return 0.0, 0.0, 0
+
+def get_reference_latency(rows, name, payload=None):
+    matches = [row for row in rows if row.get("Algorithm", row.get("Scheme")) == name]
+    if name == "Ascon-AEAD128":
+        matches = [row for row in rows if row.get("Algorithm", "").startswith(name)]
+    if payload is not None:
+        matches = [row for row in matches if int(row.get("Payload (B)", -1)) == payload]
+    if not matches:
+        raise ValueError(f"Latenza di riferimento non trovata per {name}, payload={payload}")
+    return float(matches[0]["Mean Latency (us)"])
 
 def cooldown_timer(seconds=8):
     print(f"{CYAN}--- Raffreddamento CPU ({seconds}s per stabilizzare temperatura) ---{RESET}")
@@ -83,6 +97,8 @@ def cooldown_timer(seconds=8):
 
 def main():
     check_build()
+    bulk_rows = load_reference_rows("bulk_encryption_summary_ci95.csv")
+    km_rows = load_reference_rows("key_management_summary_ci95.csv")
 
     print(f"{BOLD}{CYAN}==========================================================================")
     print("   GUIDA INTERATTIVA MISURA ENERGIA STEADY-STATE (Raspberry Pi)")
@@ -111,7 +127,7 @@ def main():
 
     # Costruzione lista completa dei test
     test_queue = []
-    # 1. AEAD (Payloads 64, 255, 1024)
+    # 1. AEAD (Payloads 8, 16, 32, 64, 128, 256, 512, 1024)
     for algo_id, algo_name in AEAD_TESTS:
         for payload in PAYLOADS:
             test_queue.append({
@@ -150,13 +166,13 @@ def main():
             print(f" Payload / Scambiati: {payload} Bytes")
             print(f"--------------------------------------------------------------------------{RESET}")
 
-            # 1. Calcolo latenza software
-            print(f"[*] Calcolo latenza software ({name})...", end="", flush=True)
             if not is_km:
-                lat_mean_us, lat_std_us, cycles = get_latency_aead(tid, payload)
+                reference_name = AEAD_REFERENCE_NAMES[tid]
+                lat_mean_us = get_reference_latency(bulk_rows, reference_name, payload)
             else:
-                lat_mean_us, lat_std_us, cycles = get_latency_km(tid)
-            print(f" {GREEN}OK: {lat_mean_us:.3f} µs (± {lat_std_us:.3f}) | {cycles} cicli/op{RESET}")
+                reference_name = KM_REFERENCE_NAMES[tid]
+                lat_mean_us = get_reference_latency(km_rows, reference_name)
+            print(f"[*] Latenza di riferimento da summary: {lat_mean_us:.3f} µs")
 
             # 2. Avvio Carico Continuo (Steady-State Burn)
             print(f"\n{BOLD}{YELLOW}>>> ATTENZIONE: AVVIO CARICO CONTINUO AL 100% SULLA CPU... <<<{RESET}")
@@ -223,8 +239,7 @@ def main():
                     "category": cat,
                     "algorithm": name,
                     "payload_bytes": payload,
-                    "latency_us": lat_mean_us,
-                    "cycles_per_op": cycles,
+                    "reference_latency_us": lat_mean_us,
                     "voltage_v": voltage,
                     "i_idle_a": i_idle,
                     "i_active_a": i_active,
@@ -252,7 +267,7 @@ def main():
 def save_results(results, voltage, i_idle):
     # 1. Scrittura CSV
     fieldnames = [
-        "category", "algorithm", "payload_bytes", "latency_us", "cycles_per_op",
+        "category", "algorithm", "payload_bytes", "reference_latency_us",
         "voltage_v", "i_idle_a", "i_active_a", "p_active_w", "p_dyn_w",
         "e_dyn_uj", "e_tot_uj", "e_per_byte_nj"
     ]
@@ -263,34 +278,6 @@ def save_results(results, voltage, i_idle):
 
     print(f"{GREEN}[OK] File CSV salvato con successo: {CSV_OUTPUT}{RESET}")
 
-    # 2. Generazione Report Markdown e Tabelle LaTeX per la tesi
-    with open(MD_OUTPUT, "w") as f:
-        f.write("# Report Misure Energetiche - Tesi Magistrale Atlas\n\n")
-        f.write(f"- **Data Acquisizione:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"- **Tensione di Alimentazione ($V$):** {voltage:.2f} V\n")
-        f.write(f"- **Corrente IDLE ($I_{{idle}}$):** {i_idle:.3f} A ({voltage*i_idle:.3f} W)\n\n")
-
-        f.write("## 1. Crittografia Simmetrica / AEAD (Payload: 64, 255, 1024 B)\n\n")
-        f.write("| Algoritmo | Payload | Latenza (µs) | Cicli/Op | $I_{attivo}$ (A) | $P_{dyn}$ (W) | $E_{dyn}$ (µJ) | nJ/Byte |\n")
-        f.write("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
-        for r in results:
-            if r["category"] == "AEAD Bulk Encryption":
-                f.write(f"| **{r['algorithm']}** | {r['payload_bytes']} B | {r['latency_us']:.2f} | {r['cycles_per_op']} | {r['i_active_a']:.3f} | {r['p_dyn_w']:.3f} | **{r['e_dyn_uj']:.4f}** | {r['e_per_byte_nj']:.2f} |\n")
-
-        f.write("\n## 2. Key Management Roadmap (PSK, Handshake, X25519, ML-KEM)\n\n")
-        f.write("| Schema | Scambio (Bytes) | Latenza (µs) | Cicli/Op | $I_{attivo}$ (A) | $P_{dyn}$ (W) | $E_{dyn}$ (µJ) |\n")
-        f.write("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
-        for r in results:
-            if r["category"] == "Key Management":
-                f.write(f"| **{r['algorithm']}** | {r['payload_bytes']} B | {r['latency_us']:.2f} | {r['cycles_per_op']} | {r['i_active_a']:.3f} | {r['p_dyn_w']:.3f} | **{r['e_dyn_uj']:.4f}** |\n")
-
-        f.write("\n\n## Formule Adottate per la Tesi:\n")
-        f.write("$$\\Delta I = I_{attivo} - I_{idle}$$\n")
-        f.write("$$P_{dyn} = V \\cdot \\Delta I$$\n")
-        f.write("$$E_{dyn} = P_{dyn} \\cdot t_{op} \\quad [\\mu\\text{J}]$$\n")
-        f.write("$$E_{byte} = \\frac{E_{dyn}}{\\text{Payload}} \\quad [\\text{nJ/Byte}]$$\n")
-
-    print(f"{GREEN}[OK] Report Markdown generato: {MD_OUTPUT}{RESET}")
     print(f"{BOLD}{CYAN}Campagna di misura terminata con successo!{RESET}\n")
 
 if __name__ == "__main__":

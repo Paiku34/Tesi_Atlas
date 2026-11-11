@@ -16,6 +16,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+static constexpr int KEY_MGMT_WARMUP_ITERATIONS = 50;
+static constexpr int KEY_MGMT_MEASUREMENT_ITERATIONS = 1000;
+
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <x86intrin.h>
 #define COMPILER_IS_X86
@@ -97,6 +100,49 @@ inline long long read_intel_rapl_uj() {
     }
     fclose(fp);
     return energy_uj; // Ritorna l'energia reale in microJoule
+}
+
+struct KeyMgmtMeasurement {
+    std::vector<double> sample_times_us;
+    double mean_us = 0.0;
+    unsigned long long cycles_per_op = 0;
+    double energy_uj = -1.0;
+};
+
+template <typename Operation>
+inline KeyMgmtMeasurement measure_key_management(Operation&& operation, int iterations) {
+    for (int i = 0; i < KEY_MGMT_WARMUP_ITERATIONS; i++) {
+        operation();
+    }
+
+    KeyMgmtMeasurement result;
+    result.sample_times_us.reserve(iterations);
+    const long long energy_start = read_intel_rapl_uj();
+    const unsigned long long cycles_start = read_cpu_cycles();
+
+    for (int i = 0; i < iterations; i++) {
+        const auto start = std::chrono::high_resolution_clock::now();
+        operation();
+        const auto end = std::chrono::high_resolution_clock::now();
+        result.sample_times_us.push_back(
+            std::chrono::duration<double, std::micro>(end - start).count());
+    }
+
+    const unsigned long long cycles_end = read_cpu_cycles();
+    const long long energy_end = read_intel_rapl_uj();
+    const unsigned long long cycle_delta = cycles_end - cycles_start;
+    result.cycles_per_op = (cycles_end >= cycles_start && cycle_delta <= 1000000000000ULL)
+        ? cycle_delta / iterations
+        : 0;
+    if (energy_start != -1 && energy_end >= energy_start) {
+        result.energy_uj = static_cast<double>(energy_end - energy_start) / iterations;
+    }
+
+    for (double sample : result.sample_times_us) {
+        result.mean_us += sample;
+    }
+    result.mean_us /= iterations;
+    return result;
 }
 
 // Barriera per bloccare le ottimizzazioni aggressive del compilatore (-O3)

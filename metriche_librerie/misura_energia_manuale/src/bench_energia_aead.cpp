@@ -250,12 +250,9 @@ int main(int argc, char* argv[]) {
     }
 
     auto runners = create_aead_runners();
-    const std::vector<size_t> ALLOWED_PAYLOADS = {64, 255, 1024};
-
     if (argc < 2) {
         std::cout << "Uso:\n"
                   << "  " << argv[0] << " --list\n"
-                  << "  " << argv[0] << " --latency <algo_id> <payload_bytes>\n"
                   << "  " << argv[0] << " --burn <algo_id> <payload_bytes> [durata_sec]\n";
         return 0;
     }
@@ -267,26 +264,7 @@ int main(int argc, char* argv[]) {
         for (const auto& kv : runners) {
             std::cout << "  " << std::left << std::setw(16) << kv.first << " -> " << kv.second->get_name() << "\n";
         }
-        std::cout << "PAYLOAD SUPPORTATI: 64, 255, 1024 bytes\n";
-        return 0;
-    }
-
-    if (mode == "--latency" && argc >= 4) {
-        std::string algo_id = argv[2];
-        size_t payload = std::stoul(argv[3]);
-
-        if (runners.find(algo_id) == runners.end()) {
-            std::cerr << "Algoritmo sconosciuto: " << algo_id << "\n";
-            return 1;
-        }
-
-        // Identico a benchmark_core.hpp: 100 warm-up, 5000 iterazioni reali
-        auto stats = measure_software_latency(runners[algo_id].get(), payload, 5000, 100);
-        // Output strutturato leggibile sia da umano che da script python
-        std::cout << "LATENCY_RESULT|" << algo_id << "|" << runners[algo_id]->get_name() << "|"
-                  << payload << "|" << std::fixed << std::setprecision(4)
-                  << stats.latency_us_mean << "|" << stats.latency_us_std << "|"
-                  << stats.cycles_per_op << "\n";
+        std::cout << "PAYLOAD SUPPORTATI: 8, 16, 32, 64, 128, 256, 512, 1024 bytes\n";
         return 0;
     }
 
