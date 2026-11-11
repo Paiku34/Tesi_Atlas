@@ -30,11 +30,11 @@ void benchmark_kem(const char* alg_name, KeyMgmtResult& res) {
         return;
     }
 
-    constexpr size_t PSK_TAG_BYTES = 16;
     // GS challenge: nonce + tag. Buoy response: nonce + KEM ciphertext + tag.
     // The Ground Station public key is provisioned before deployment and is not
     // part of the one-way runtime exchange.
-    res.exchanged_bytes = 32 + PSK_TAG_BYTES + 32 + kem->length_ciphertext + PSK_TAG_BYTES;
+    res.exchanged_bytes = (HANDSHAKE_NONCE_BYTES + PSK_TAG_BYTES) +
+                          (HANDSHAKE_NONCE_BYTES + kem->length_ciphertext + PSK_TAG_BYTES);
 
     std::vector<uint8_t> public_key(kem->length_public_key);
     std::vector<uint8_t> secret_key(kem->length_secret_key);
@@ -48,10 +48,10 @@ void benchmark_kem(const char* alg_name, KeyMgmtResult& res) {
     do_not_optimize_away(public_key);
     do_not_optimize_away(secret_key);
 
-    uint8_t gs_nonce[32];
+    uint8_t gs_nonce[HANDSHAKE_NONCE_BYTES];
     uint8_t gs_tag[crypto_auth_BYTES];
-    std::vector<uint8_t> response_data(32 + 32 + kem->length_ciphertext);
-    std::vector<uint8_t> gs_auth_data(32 + kem->length_public_key);
+    std::vector<uint8_t> response_data(HANDSHAKE_NONCE_BYTES + HANDSHAKE_NONCE_BYTES + kem->length_ciphertext);
+    std::vector<uint8_t> gs_auth_data(HANDSHAKE_NONCE_BYTES + kem->length_public_key);
     randombytes_buf(gs_nonce, sizeof(gs_nonce));
     memcpy(gs_auth_data.data(), gs_nonce, sizeof(gs_nonce));
     memcpy(gs_auth_data.data() + sizeof(gs_nonce), public_key.data(), kem->length_public_key);
@@ -62,10 +62,10 @@ void benchmark_kem(const char* alg_name, KeyMgmtResult& res) {
     // One-way operation measured on the buoy only:
     // verify GS PSK challenge, encapsulate, authenticate response, derive key.
     KeyMgmtMeasurement measurement = measure_key_management([&]() {
-        uint8_t buoy_nonce[32];
+        uint8_t buoy_nonce[HANDSHAKE_NONCE_BYTES];
         uint8_t response_tag[crypto_auth_BYTES];
         uint8_t expected_tag[crypto_auth_BYTES];
-        uint8_t session_key[32];
+        uint8_t session_key[SESSION_KEY_BYTES];
         uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
 
         crypto_auth(expected_tag, gs_auth_data.data(), gs_auth_data.size(), psk);
@@ -76,14 +76,14 @@ void benchmark_kem(const char* alg_name, KeyMgmtResult& res) {
         randombytes_buf(buoy_nonce, sizeof(buoy_nonce));
         OQS_KEM_encaps(kem, ciphertext.data(), shared_secret_sender.data(), public_key.data());
         memcpy(response_data.data(), gs_nonce, sizeof(gs_nonce));
-        memcpy(response_data.data() + 32, buoy_nonce, 32);
-        memcpy(response_data.data() + 64, ciphertext.data(), ciphertext.size());
+        memcpy(response_data.data() + HANDSHAKE_NONCE_BYTES, buoy_nonce, sizeof(buoy_nonce));
+        memcpy(response_data.data() + 2 * HANDSHAKE_NONCE_BYTES, ciphertext.data(), ciphertext.size());
         crypto_auth(response_tag, response_data.data(), response_data.size(), psk);
 
         crypto_kdf_hkdf_sha256_extract(
             prk, psk, sizeof(psk), shared_secret_sender.data(), shared_secret_sender.size());
         crypto_kdf_hkdf_sha256_expand(
-            session_key, sizeof(session_key), "ATLAS_MLKEM", 12, prk);
+            session_key, sizeof(session_key), HKDF_LABEL_MLKEM, strlen(HKDF_LABEL_MLKEM), prk);
         do_not_optimize_away(response_tag);
         do_not_optimize_away(session_key);
     }, ITERATIONS);

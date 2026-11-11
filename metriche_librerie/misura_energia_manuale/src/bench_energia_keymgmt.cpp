@@ -38,9 +38,13 @@ public:
 // 2. Symmetric 2-Way Handshake (HMAC + HKDF-SHA256)
 // -----------------------------------------------------------------------------
 class SymmetricHandshake_Runner : public IAlgorithmRunner {
-    uint8_t psk[32];
-    uint8_t nc[32], ns[32], tag[crypto_auth_BYTES], gs_tag[crypto_auth_BYTES], session_key[32];
-    uint8_t handshake_data[64];
+    uint8_t psk[SESSION_KEY_BYTES];
+    uint8_t nc[HANDSHAKE_NONCE_BYTES];
+    uint8_t ns[HANDSHAKE_NONCE_BYTES];
+    uint8_t tag[crypto_auth_BYTES];
+    uint8_t gs_tag[crypto_auth_BYTES];
+    uint8_t session_key[SESSION_KEY_BYTES];
+    uint8_t handshake_data[HANDSHAKE_NONCE_BYTES + HANDSHAKE_NONCE_BYTES];
     uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
 public:
     SymmetricHandshake_Runner() {
@@ -52,7 +56,10 @@ public:
     }
     std::string get_name() const override { return "Symmetric Handshake (2-Way HKDF)"; }
     std::string get_category() const override { return "KEY_MGMT"; }
-    size_t get_payload_size() const override { return 96; } // 32+16 B GS, 32+16 B boa
+    size_t get_payload_size() const override { 
+        return (HANDSHAKE_NONCE_BYTES + PSK_TAG_BYTES) + 
+               (HANDSHAKE_NONCE_BYTES + PSK_TAG_BYTES); 
+    }
 
     void setup(size_t) override {}
 
@@ -61,12 +68,12 @@ public:
         memcpy(handshake_data, nc, sizeof(nc));
         memset(handshake_data + sizeof(nc), 0, sizeof(ns));
         crypto_auth(expected_tag, handshake_data, sizeof(handshake_data), psk);
-        if (sodium_memcmp(gs_tag, expected_tag, 16) != 0) return;
+        if (sodium_memcmp(gs_tag, expected_tag, PSK_TAG_BYTES) != 0) return;
 
         // Buoy-side response
         randombytes_buf(ns, sizeof(ns));
-        memcpy(handshake_data, nc, 32);
-        memcpy(handshake_data + 32, ns, 32);
+        memcpy(handshake_data, nc, HANDSHAKE_NONCE_BYTES);
+        memcpy(handshake_data + HANDSHAKE_NONCE_BYTES, ns, HANDSHAKE_NONCE_BYTES);
 
         // 3. Tag MAC
         crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
@@ -74,7 +81,7 @@ public:
         // 4. Verifica & HKDF
         if (crypto_auth_verify(tag, handshake_data, sizeof(handshake_data), psk) == 0) {
             crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
-            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
+            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), HKDF_LABEL_SYMM, strlen(HKDF_LABEL_SYMM), prk);
         }
         do_not_optimize_away(session_key);
     }
@@ -86,15 +93,15 @@ public:
 class ECDH_X25519_Runner : public IAlgorithmRunner {
     uint8_t psk[crypto_auth_KEYBYTES];
     uint8_t gs_pk[crypto_kx_PUBLICKEYBYTES];
-    uint8_t gs_nonce[32];
-    uint8_t gs_auth_data[32 + crypto_kx_PUBLICKEYBYTES];
+    uint8_t gs_nonce[HANDSHAKE_NONCE_BYTES];
+    uint8_t gs_auth_data[HANDSHAKE_NONCE_BYTES + crypto_kx_PUBLICKEYBYTES];
     uint8_t gs_tag[crypto_auth_BYTES];
     uint8_t buoy_pk[crypto_kx_PUBLICKEYBYTES];
     uint8_t buoy_sk[crypto_kx_SECRETKEYBYTES];
     uint8_t shared_secret[crypto_scalarmult_BYTES];
-    uint8_t response_data[32 + 32 + crypto_kx_PUBLICKEYBYTES];
+    uint8_t response_data[HANDSHAKE_NONCE_BYTES + HANDSHAKE_NONCE_BYTES + crypto_kx_PUBLICKEYBYTES];
     uint8_t response_tag[crypto_auth_BYTES];
-    uint8_t session_key[32];
+    uint8_t session_key[SESSION_KEY_BYTES];
     uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
 public:
     ECDH_X25519_Runner() {
@@ -108,26 +115,29 @@ public:
     }
     std::string get_name() const override { return "ECDH X25519 One-Way (PSK Auth)"; }
     std::string get_category() const override { return "KEY_MGMT"; }
-    size_t get_payload_size() const override { return 128; }
+    size_t get_payload_size() const override { 
+        return (HANDSHAKE_NONCE_BYTES + PSK_TAG_BYTES) + 
+               (HANDSHAKE_NONCE_BYTES + crypto_kx_PUBLICKEYBYTES + PSK_TAG_BYTES); 
+    }
 
     void setup(size_t) override {}
 
     void run_single_op() override {
         uint8_t expected_tag[crypto_auth_BYTES];
         crypto_auth(expected_tag, gs_auth_data, sizeof(gs_auth_data), psk);
-        if (sodium_memcmp(gs_tag, expected_tag, 16) != 0) return;
+        if (sodium_memcmp(gs_tag, expected_tag, PSK_TAG_BYTES) != 0) return;
 
-        uint8_t buoy_nonce[32];
+        uint8_t buoy_nonce[HANDSHAKE_NONCE_BYTES];
         randombytes_buf(buoy_nonce, sizeof(buoy_nonce));
         crypto_kx_keypair(buoy_pk, buoy_sk);
         if (crypto_scalarmult_curve25519(shared_secret, buoy_sk, gs_pk) != 0) return;
 
         memcpy(response_data, gs_nonce, sizeof(gs_nonce));
-        memcpy(response_data + 32, buoy_nonce, sizeof(buoy_nonce));
-        memcpy(response_data + 64, buoy_pk, sizeof(buoy_pk));
+        memcpy(response_data + HANDSHAKE_NONCE_BYTES, buoy_nonce, sizeof(buoy_nonce));
+        memcpy(response_data + 2 * HANDSHAKE_NONCE_BYTES, buoy_pk, sizeof(buoy_pk));
         crypto_auth(response_tag, response_data, sizeof(response_data), psk);
         crypto_kdf_hkdf_sha256_extract(prk, psk, sizeof(psk), shared_secret, sizeof(shared_secret));
-        crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_ECDH", 11, prk);
+        crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), HKDF_LABEL_ECDH, strlen(HKDF_LABEL_ECDH), prk);
         do_not_optimize_away(session_key);
     }
 };
@@ -145,12 +155,12 @@ class MLKEM_Runner : public IAlgorithmRunner {
     std::vector<uint8_t> ciphertext;
     std::vector<uint8_t> ss_sender;
     uint8_t psk[crypto_auth_KEYBYTES];
-    uint8_t gs_nonce[32];
+    uint8_t gs_nonce[HANDSHAKE_NONCE_BYTES];
     std::vector<uint8_t> gs_auth_data;
     uint8_t gs_tag[crypto_auth_BYTES];
     std::vector<uint8_t> response_data;
     uint8_t response_tag[crypto_auth_BYTES];
-    uint8_t session_key[32];
+    uint8_t session_key[SESSION_KEY_BYTES];
     uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
 public:
     MLKEM_Runner(const std::string& name, const std::string& dname) 
@@ -161,8 +171,8 @@ public:
             secret_key.resize(kem->length_secret_key);
             ciphertext.resize(kem->length_ciphertext);
             ss_sender.resize(kem->length_shared_secret);
-            gs_auth_data.resize(32 + kem->length_public_key);
-            response_data.resize(32 + 32 + kem->length_ciphertext);
+            gs_auth_data.resize(HANDSHAKE_NONCE_BYTES + kem->length_public_key);
+            response_data.resize(HANDSHAKE_NONCE_BYTES + HANDSHAKE_NONCE_BYTES + kem->length_ciphertext);
             randombytes_buf(psk, sizeof(psk));
             OQS_KEM_keypair(kem, public_key.data(), secret_key.data());
             randombytes_buf(gs_nonce, sizeof(gs_nonce));
@@ -178,7 +188,8 @@ public:
     std::string get_name() const override { return display_name; }
     std::string get_category() const override { return "KEY_MGMT"; }
     size_t get_payload_size() const override { 
-        return kem ? (96 + kem->length_ciphertext) : 0;
+        return kem ? ((HANDSHAKE_NONCE_BYTES + PSK_TAG_BYTES) + 
+                      (HANDSHAKE_NONCE_BYTES + kem->length_ciphertext + PSK_TAG_BYTES)) : 0;
     }
 
     void setup(size_t) override {}
@@ -187,17 +198,17 @@ public:
         if (!kem) return;
         uint8_t expected_tag[crypto_auth_BYTES];
         crypto_auth(expected_tag, gs_auth_data.data(), gs_auth_data.size(), psk);
-        if (sodium_memcmp(gs_tag, expected_tag, 16) != 0) return;
+        if (sodium_memcmp(gs_tag, expected_tag, PSK_TAG_BYTES) != 0) return;
 
         OQS_KEM_encaps(kem, ciphertext.data(), ss_sender.data(), public_key.data());
-        uint8_t buoy_nonce[32];
+        uint8_t buoy_nonce[HANDSHAKE_NONCE_BYTES];
         randombytes_buf(buoy_nonce, sizeof(buoy_nonce));
         memcpy(response_data.data(), gs_nonce, sizeof(gs_nonce));
-        memcpy(response_data.data() + 32, buoy_nonce, sizeof(buoy_nonce));
-        memcpy(response_data.data() + 64, ciphertext.data(), ciphertext.size());
+        memcpy(response_data.data() + HANDSHAKE_NONCE_BYTES, buoy_nonce, sizeof(buoy_nonce));
+        memcpy(response_data.data() + 2 * HANDSHAKE_NONCE_BYTES, ciphertext.data(), ciphertext.size());
         crypto_auth(response_tag, response_data.data(), response_data.size(), psk);
         crypto_kdf_hkdf_sha256_extract(prk, psk, sizeof(psk), ss_sender.data(), ss_sender.size());
-        crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_MLKEM", 12, prk);
+        crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), HKDF_LABEL_MLKEM, strlen(HKDF_LABEL_MLKEM), prk);
         do_not_optimize_away(session_key);
     }
 };

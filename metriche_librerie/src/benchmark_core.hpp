@@ -19,6 +19,17 @@
 static constexpr int KEY_MGMT_WARMUP_ITERATIONS = 50;
 static constexpr int KEY_MGMT_MEASUREMENT_ITERATIONS = 1000;
 
+// Costanti unificate del protocollo Secure Sonobuoy Telemetry (NATO ANEP-96 / ATLAS)
+static constexpr size_t HANDSHAKE_NONCE_BYTES = 32; // Nonce casuale GS e Boa (256 bit, entropia e anti-replay)
+static constexpr size_t PSK_TAG_BYTES         = 16; // Tag MAC autenticazione PSK trasmesso su canale (128 bit)
+static constexpr size_t SESSION_KEY_BYTES     = 32; // Chiave di sessione simmetrica derivata (256 bit per AEAD)
+static constexpr size_t AEAD_TAG_BYTES        = 16; // Tag di autenticazione AEAD standard (128 bit per GCM, Poly1305, Ascon)
+
+// Etichette di contesto HKDF (Domain Separation)
+static constexpr const char* HKDF_LABEL_SYMM  = "ATLAS_SH";
+static constexpr const char* HKDF_LABEL_ECDH  = "ATLAS_ECDH";
+static constexpr const char* HKDF_LABEL_MLKEM = "ATLAS_MLKEM";
+
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <x86intrin.h>
 #define COMPILER_IS_X86

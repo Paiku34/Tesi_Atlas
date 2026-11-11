@@ -51,13 +51,15 @@ void benchmark_psk_kdf_libsodium(KeyMgmtResult& res, int iterations) {
 void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
     res.scheme_name = "Symmetric Handshake";
     res.paradigm = "Symmetric Auth, Buoy Only";
-    res.exchanged_bytes = 96;
+    // GS challenge: Nonce (32B) + Tag (16B). Buoy response: Nonce (32B) + Tag (16B)
+    res.exchanged_bytes = (HANDSHAKE_NONCE_BYTES + PSK_TAG_BYTES) + 
+                          (HANDSHAKE_NONCE_BYTES + PSK_TAG_BYTES);
 
-    uint8_t psk[32];
+    uint8_t psk[SESSION_KEY_BYTES];
     randombytes_buf(psk, sizeof(psk));
-    constexpr size_t PSK_TAG_BYTES = 16;
-    uint8_t nc[32], ns[32], tag[crypto_auth_BYTES], session_key[32];
-    uint8_t handshake_data[64];
+    uint8_t nc[HANDSHAKE_NONCE_BYTES], ns[HANDSHAKE_NONCE_BYTES];
+    uint8_t tag[crypto_auth_BYTES], session_key[SESSION_KEY_BYTES];
+    uint8_t handshake_data[HANDSHAKE_NONCE_BYTES + HANDSHAKE_NONCE_BYTES];
     uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
 
     // The Ground Station nonce and authentication tag are received before the
@@ -76,10 +78,10 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
         crypto_auth(expected_gs_tag, handshake_data, sizeof(handshake_data), psk);
         if (sodium_memcmp(gs_tag, expected_gs_tag, PSK_TAG_BYTES) == 0) {
             randombytes_buf(ns, sizeof(ns));
-            memcpy(handshake_data + 32, ns, 32);
+            memcpy(handshake_data + HANDSHAKE_NONCE_BYTES, ns, sizeof(ns));
             crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
             crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
-            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), "ATLAS_SH", 8, prk);
+            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), HKDF_LABEL_SYMM, strlen(HKDF_LABEL_SYMM), prk);
             do_not_optimize_away(session_key);
         }
     }, iterations);
@@ -94,21 +96,21 @@ void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
 // 3. One-way authenticated X25519 (buoy side only)
 // -----------------------------------------------------------------------------
 void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
-    constexpr size_t PSK_TAG_BYTES = 16;
     res.scheme_name = "ECDH X25519 One-Way (PSK Auth)";
     res.paradigm = "Classical ECC, Buoy Only";
-    // GS challenge (32 B nonce + 16 B tag) + buoy response
-    // (32 B nonce + 32 B ephemeral public key + 16 B tag).
-    res.exchanged_bytes = 32 + PSK_TAG_BYTES + 32 + 32 + PSK_TAG_BYTES;
+    // GS challenge: Nonce (32B) + Tag (16B)
+    // Buoy response: Nonce (32B) + Ephemeral PK (32B) + Tag (16B)
+    res.exchanged_bytes = (HANDSHAKE_NONCE_BYTES + PSK_TAG_BYTES) + 
+                          (HANDSHAKE_NONCE_BYTES + crypto_kx_PUBLICKEYBYTES + PSK_TAG_BYTES);
 
     uint8_t psk[crypto_auth_KEYBYTES];
     uint8_t gs_pk[crypto_kx_PUBLICKEYBYTES];
     uint8_t buoy_pk[crypto_kx_PUBLICKEYBYTES];
     uint8_t buoy_sk[crypto_kx_SECRETKEYBYTES];
     uint8_t shared_secret[crypto_scalarmult_BYTES];
-    uint8_t session_key[32];
+    uint8_t session_key[SESSION_KEY_BYTES];
     uint8_t prk[crypto_kdf_hkdf_sha256_KEYBYTES];
-    uint8_t response_data[32 + 32 + crypto_kx_PUBLICKEYBYTES];
+    uint8_t response_data[HANDSHAKE_NONCE_BYTES + HANDSHAKE_NONCE_BYTES + crypto_kx_PUBLICKEYBYTES];
     uint8_t response_tag[crypto_auth_BYTES];
 
     randombytes_buf(psk, sizeof(psk));
@@ -117,8 +119,8 @@ void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
     uint8_t gs_sk[crypto_kx_SECRETKEYBYTES];
     crypto_kx_keypair(gs_pk, gs_sk);
 
-    uint8_t gs_nonce[32];
-    uint8_t gs_auth_data[32 + crypto_kx_PUBLICKEYBYTES];
+    uint8_t gs_nonce[HANDSHAKE_NONCE_BYTES];
+    uint8_t gs_auth_data[HANDSHAKE_NONCE_BYTES + crypto_kx_PUBLICKEYBYTES];
     uint8_t gs_tag[crypto_auth_BYTES];
     randombytes_buf(gs_nonce, sizeof(gs_nonce));
     memcpy(gs_auth_data, gs_nonce, sizeof(gs_nonce));
@@ -132,7 +134,7 @@ void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
             return;
         }
 
-        uint8_t buoy_nonce[32];
+        uint8_t buoy_nonce[HANDSHAKE_NONCE_BYTES];
         randombytes_buf(buoy_nonce, sizeof(buoy_nonce));
         crypto_kx_keypair(buoy_pk, buoy_sk);
         if (crypto_scalarmult_curve25519(shared_secret, buoy_sk, gs_pk) != 0) {
@@ -140,14 +142,14 @@ void benchmark_x25519_libsodium(KeyMgmtResult& res, int iterations) {
         }
 
         memcpy(response_data, gs_nonce, sizeof(gs_nonce));
-        memcpy(response_data + 32, buoy_nonce, 32);
-        memcpy(response_data + 64, buoy_pk, sizeof(buoy_pk));
+        memcpy(response_data + HANDSHAKE_NONCE_BYTES, buoy_nonce, sizeof(buoy_nonce));
+        memcpy(response_data + 2 * HANDSHAKE_NONCE_BYTES, buoy_pk, sizeof(buoy_pk));
         crypto_auth(response_tag, response_data, sizeof(response_data), psk);
 
         crypto_kdf_hkdf_sha256_extract(
             prk, psk, sizeof(psk), shared_secret, sizeof(shared_secret));
         crypto_kdf_hkdf_sha256_expand(
-            session_key, sizeof(session_key), "ATLAS_ECDH", 11, prk);
+            session_key, sizeof(session_key), HKDF_LABEL_ECDH, strlen(HKDF_LABEL_ECDH), prk);
 
         do_not_optimize_away(response_tag);
         do_not_optimize_away(session_key);
