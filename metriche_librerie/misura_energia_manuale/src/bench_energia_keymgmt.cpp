@@ -52,7 +52,7 @@ public:
     }
     std::string get_name() const override { return "Symmetric Handshake (2-Way HKDF)"; }
     std::string get_category() const override { return "KEY_MGMT"; }
-    size_t get_payload_size() const override { return 80; } // 80 bytes scambiati
+    size_t get_payload_size() const override { return 96; } // 32+16 B GS, 32+16 B boa
 
     void setup(size_t) override {}
 

@@ -36,7 +36,7 @@ AEAD_TESTS = [
 
 KM_TESTS = [
     ("psk", "PSK + KDF (BLAKE2b)", 0),
-    ("symm_handshake", "Symmetric Handshake (2-Way HKDF)", 80),
+    ("symm_handshake", "Symmetric Handshake (2-Way HKDF)", 96),
     ("x25519", "ECDH X25519 One-Way (PSK Auth)", 128),
     ("mlkem512", "ML-KEM-512", 864),
     ("mlkem768", "ML-KEM-768", 1184),

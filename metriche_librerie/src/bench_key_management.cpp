@@ -51,7 +51,7 @@ void benchmark_psk_kdf_libsodium(KeyMgmtResult& res, int iterations) {
 void benchmark_symmetric_handshake(KeyMgmtResult& res, int iterations) {
     res.scheme_name = "Symmetric Handshake";
     res.paradigm = "Symmetric Auth, Buoy Only";
-    res.exchanged_bytes = 80;
+    res.exchanged_bytes = 96;
 
     uint8_t psk[32];
     randombytes_buf(psk, sizeof(psk));
