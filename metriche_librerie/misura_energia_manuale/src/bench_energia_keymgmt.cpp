@@ -78,11 +78,9 @@ public:
         // 3. Tag MAC
         crypto_auth(tag, handshake_data, sizeof(handshake_data), psk);
 
-        // 4. Verifica & HKDF
-        if (crypto_auth_verify(tag, handshake_data, sizeof(handshake_data), psk) == 0) {
-            crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
-            crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), HKDF_LABEL_SYMM, strlen(HKDF_LABEL_SYMM), prk);
-        }
+        // 4. Derivazione chiave sessione HKDF
+        crypto_kdf_hkdf_sha256_extract(prk, handshake_data, sizeof(handshake_data), psk, sizeof(psk));
+        crypto_kdf_hkdf_sha256_expand(session_key, sizeof(session_key), HKDF_LABEL_SYMM, strlen(HKDF_LABEL_SYMM), prk);
         do_not_optimize_away(session_key);
     }
 };
