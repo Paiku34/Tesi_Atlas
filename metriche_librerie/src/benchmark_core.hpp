@@ -72,17 +72,11 @@ inline unsigned long long read_cpu_cycles() {
             return count;
         }
     }
-    // Fallback: ARMv8 Generic Timer (cntvct_el0)
-    uint64_t val;
-    asm volatile("isb; mrs %0, cntvct_el0" : "=r"(val));
-    return (unsigned long long)val;
-#elif defined(__aarch64__)
-    uint64_t val;
-    asm volatile("isb; mrs %0, cntvct_el0" : "=r"(val));
-    return (unsigned long long)val;
+    // Se perf_event_open non e' disponibile o fallisce, ritorna 0 (cicli non supportati)
+    return 0ULL;
 #else
     return 0ULL;
-    #endif
+#endif
 }
 
 class ICryptoAlgorithm {
