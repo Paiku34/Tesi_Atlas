@@ -53,7 +53,7 @@ AEAD_REFERENCE_NAMES = {
 KM_REFERENCE_NAMES = {
     "psk": "PSK + KDF (Libsodium)",
     "symm_handshake": "Symmetric Handshake",
-    "x25519": "ECDH X25519 One-Way (PSK Auth)",
+    "x25519": "ECDH X25519 (Libsodium)",
     "mlkem512": "ML-KEM-512",
     "mlkem768": "ML-KEM-768",
     "mlkem1024": "ML-KEM-1024",
@@ -81,9 +81,26 @@ def load_reference_rows(filename):
 def get_reference_latency(rows, name, payload=None):
     matches = [row for row in rows if row.get("Algorithm", row.get("Scheme")) == name]
     if name == "Ascon-AEAD128":
-        matches = [row for row in rows if row.get("Algorithm", "").startswith(name)]
+        matches = [row for row in rows if row.get("Algorithm", row.get("Scheme", "")).startswith(name)]
     if payload is not None:
         matches = [row for row in matches if int(row.get("Payload (B)", -1)) == payload]
+    # First try exact match on Algorithm or Scheme
+    matches = [row for row in rows if row.get("Algorithm", row.get("Scheme")) == name]
+    # If no exact match, try prefix match (handles Ascon and algorithms with variant suffixes)
+    if not matches:
+        matches = [row for row in rows if row.get("Algorithm", row.get("Scheme", "")).startswith(name)]
+    # If still no matches, try case‑insensitive containment (e.g., "AES-256-GCM" inside "AES-256-GCM (OpenSSL)")
+    if not matches:
+        lowered = name.lower()
+        matches = [row for row in rows if lowered in row.get("Algorithm", row.get("Scheme", "")).lower()]
+    if payload is not None:
+        matches = [row for row in matches if int(row.get("Payload (B)", -1)) == payload]
+    # Fallback: if payload filter removed all matches, retry without payload filter for the algorithm
+    if not matches and payload is not None:
+        # Re‑search using only algorithm name (without payload constraint)
+        matches = [row for row in rows if row.get("Algorithm", row.get("Scheme", "")).startswith(name)]
+        if not matches:
+            matches = [row for row in rows if lowered in row.get("Algorithm", row.get("Scheme", "")).lower()]
     if not matches:
         raise ValueError(f"Latenza di riferimento non trovata per {name}, payload={payload}")
     return float(matches[0]["Mean Latency (us)"])
