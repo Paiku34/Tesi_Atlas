@@ -1,0 +1,7 @@
+Scheme,Paradigm,Exchanged (B),Mean Latency (us),Median Latency (us),StdDev (us),CI95 (+/- us),Cycles/Op,Energy/Op (uJ),RAM Peak (KB),Samples
+PSK + KDF (Libsodium),Symmetric Pre-Shared,0,0.774,0.778,0.012,0.001,1304,N/A,2016,999
+Symmetric Handshake,"Symmetric Auth, Buoy Only",96,17.619,17.259,3.196,0.199,19787,N/A,2076,997
+ECDH X25519 One-Way (PSK Auth),"Classical ECC, Buoy Only",128,400.045,393.683,26.329,1.634,579426,N/A,2076,1000
+ML-KEM-512,Lattice (PQC),864,100.942,96.115,21.466,1.335,136980,N/A,4764,996
+ML-KEM-768,Lattice (PQC),1184,141.74,136.524,26.934,1.671,197110,N/A,5580,1000
+ML-KEM-1024,Lattice (PQC),1664,183.608,179.211,30.642,1.902,259465,N/A,5524,999
