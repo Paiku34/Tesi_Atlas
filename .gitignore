@@ -1,15 +1,17 @@
-# Ignora tutto nella root tranne metriche_librerie e file di documentazione
+# Ignora tutto nella root tranne le cartelle sorgente e file di documentazione
 /*
-!/metriche_librerie/
+!/crypto_benchmarks/
+!/radio_benchmarks/
 !.gitignore
 !/README.md
 
 # Cartelle generate automaticamente dai benchmark e dalla build
-metriche_librerie/build/
-metriche_librerie/data/
-metriche_librerie/plots/
-metriche_librerie/ubuntu22.04_armA72/plots/
-metriche_librerie/ubuntu22.04_armA72/python/
+crypto_benchmarks/build/
+crypto_benchmarks/data/
+crypto_benchmarks/plots/
+crypto_benchmarks/ubuntu22.04_armA72/plots/
+crypto_benchmarks/ubuntu22.04_armA72/python/
+radio_benchmarks/build/
 **/plots/
 **/build/
 **/.cache/
