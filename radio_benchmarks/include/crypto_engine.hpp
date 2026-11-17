@@ -52,6 +52,8 @@ public:
                          size_t ct_len,
                          std::vector<uint8_t>& out_shared_secret);
 
+    bool set_session_key_from_kem(const uint8_t* shared_secret, size_t ss_len);
+
 private:
     uint8_t session_key_[32];   // Chiave a 256 bit per AEAD
     uint8_t session_salt_[12];  // Salt di 12 byte per derivazione nonce

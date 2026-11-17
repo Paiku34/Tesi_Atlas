@@ -5,6 +5,7 @@
 #include <iostream>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <openssl/kdf.h>
 #include <sodium.h>
 
 #if __has_include(<oqs/oqs.h>)
@@ -14,7 +15,6 @@
 #define HAS_LIBOQS 0
 #endif
 
-// Ascon-C declarations
 extern "C" {
     int crypto_aead_encrypt(
         unsigned char *c, unsigned long long *clen,
@@ -47,8 +47,6 @@ CryptoEngine::CryptoEngine() {
 CryptoEngine::~CryptoEngine() {}
 
 void CryptoEngine::setup_keys() {
-    // Genera chiave a 256 bit e session salt a 96 bit (12B)
-    // In produzione o scenario reale, derivano da KEM o PSK concordato
     const uint8_t default_key[32] = {
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
@@ -78,7 +76,6 @@ bool CryptoEngine::encrypt(CryptoAlgorithm algo,
         uint8_t nonce[16];
         derive_nonce(algo, seq_num, session_salt_, nonce);
 
-        // In Ascon-C, il ciphertext contiene payload + 16 byte di tag alla fine
         std::vector<uint8_t> ct_buf(pt_len + 16);
         unsigned long long clen = 0;
 
@@ -175,7 +172,6 @@ bool CryptoEngine::decrypt(CryptoAlgorithm algo,
         uint8_t nonce[16];
         derive_nonce(algo, seq_num, session_salt_, nonce);
 
-        // Ascon-C decrypt si aspetta ciphertext concatenato con il tag alla fine
         std::vector<uint8_t> ct_and_tag(ct_len + AEAD_TAG_LEN);
         std::memcpy(ct_and_tag.data(), ciphertext, ct_len);
         std::memcpy(ct_and_tag.data() + ct_len, in_tag, AEAD_TAG_LEN);
@@ -256,11 +252,6 @@ bool CryptoEngine::decrypt(CryptoAlgorithm algo,
     return false;
 }
 
-// -----------------------------------------------------------------------------
-// KEM Implementations (X25519 e ML-KEM)
-// -----------------------------------------------------------------------------
-
-// Chiavi fisse statiche della Ground Station per test radio (pre-shared provisioned)
 static const uint8_t GS_STATIC_X25519_PK[32] = {
     0x85, 0x20, 0xf0, 0x09, 0x89, 0x30, 0xa7, 0x54,
     0x74, 0x8b, 0x7d, 0xdc, 0xb4, 0x3e, 0xf7, 0x5a,
@@ -274,13 +265,79 @@ static const uint8_t GS_STATIC_X25519_SK[32] = {
     0xb1, 0x77, 0xfb, 0xa5, 0x1d, 0xb9, 0x2c, 0x2a
 };
 
+#if HAS_LIBOQS
+struct MlKemStaticKeys {
+    bool initialized = false;
+    std::vector<uint8_t> pk;
+    std::vector<uint8_t> sk;
+};
+
+static MlKemStaticKeys g_mlkem_keys[3];
+
+static int mlkem_algo_index(KemAlgorithm algo) {
+    switch (algo) {
+        case KemAlgorithm::ML_KEM_512:  return 0;
+        case KemAlgorithm::ML_KEM_768:  return 1;
+        case KemAlgorithm::ML_KEM_1024: return 2;
+        default: return -1;
+    }
+}
+
+static bool ensure_mlkem_keys(KemAlgorithm algo, OQS_KEM* kem,
+                              const uint8_t*& out_pk, const uint8_t*& out_sk) {
+    int idx = mlkem_algo_index(algo);
+    if (idx < 0) return false;
+
+    MlKemStaticKeys& keys = g_mlkem_keys[idx];
+    if (!keys.initialized) {
+        keys.pk.resize(kem->length_public_key);
+        keys.sk.resize(kem->length_secret_key);
+
+        static const char* key_files_pk[3] = { "gs_mlkem512.pk", "gs_mlkem768.pk", "gs_mlkem1024.pk" };
+        static const char* key_files_sk[3] = { "gs_mlkem512.sk", "gs_mlkem768.sk", "gs_mlkem1024.sk" };
+
+        FILE* fpk = fopen(key_files_pk[idx], "rb");
+        FILE* fsk = fopen(key_files_sk[idx], "rb");
+        if (fpk && fsk) {
+            size_t r1 = fread(keys.pk.data(), 1, keys.pk.size(), fpk);
+            size_t r2 = fread(keys.sk.data(), 1, keys.sk.size(), fsk);
+            fclose(fpk);
+            fclose(fsk);
+            if (r1 == keys.pk.size() && r2 == keys.sk.size()) {
+                keys.initialized = true;
+                out_pk = keys.pk.data();
+                out_sk = keys.sk.data();
+                return true;
+            }
+        }
+        if (fpk) fclose(fpk);
+        if (fsk) fclose(fsk);
+
+        if (OQS_KEM_keypair(kem, keys.pk.data(), keys.sk.data()) != OQS_SUCCESS) {
+            return false;
+        }
+
+        fpk = fopen(key_files_pk[idx], "wb");
+        fsk = fopen(key_files_sk[idx], "wb");
+        if (fpk && fsk) {
+            fwrite(keys.pk.data(), 1, keys.pk.size(), fpk);
+            fwrite(keys.sk.data(), 1, keys.sk.size(), fsk);
+        }
+        if (fpk) fclose(fpk);
+        if (fsk) fclose(fsk);
+
+        keys.initialized = true;
+    }
+    out_pk = keys.pk.data();
+    out_sk = keys.sk.data();
+    return true;
+}
+#endif
+
 bool CryptoEngine::kem_encapsulate(KemAlgorithm algo,
                                    std::vector<uint8_t>& out_ciphertext,
                                    std::vector<uint8_t>& out_shared_secret) {
     if (algo == KemAlgorithm::X25519) {
-        // ECDH X25519 One-Way: Boa genera chiave effimera (PK_eph, SK_eph),
-        // Ciphertext inviato = PK_eph (32B).
-        // Shared secret = crypto_scalarmult(SK_eph, GS_PK)
         uint8_t eph_pk[crypto_kx_PUBLICKEYBYTES];
         uint8_t eph_sk[crypto_kx_SECRETKEYBYTES];
         crypto_kx_keypair(eph_pk, eph_sk);
@@ -304,16 +361,17 @@ bool CryptoEngine::kem_encapsulate(KemAlgorithm algo,
         OQS_KEM* kem = OQS_KEM_new(oqs_alg);
         if (!kem) return false;
 
-        // In uno scenario di test riproducibile, generiamo una coppia statica per la GS
-        std::vector<uint8_t> gs_pk(kem->length_public_key);
-        std::vector<uint8_t> gs_sk(kem->length_secret_key);
-        // Usa seed deterministico o keypair per la GS
-        OQS_KEM_keypair(kem, gs_pk.data(), gs_sk.data());
+        const uint8_t* gs_pk = nullptr;
+        const uint8_t* gs_sk = nullptr;
+        if (!ensure_mlkem_keys(algo, kem, gs_pk, gs_sk)) {
+            OQS_KEM_free(kem);
+            return false;
+        }
 
         out_ciphertext.resize(kem->length_ciphertext);
         out_shared_secret.resize(kem->length_shared_secret);
 
-        OQS_STATUS st = OQS_KEM_encaps(kem, out_ciphertext.data(), out_shared_secret.data(), gs_pk.data());
+        OQS_STATUS st = OQS_KEM_encaps(kem, out_ciphertext.data(), out_shared_secret.data(), gs_pk);
         OQS_KEM_free(kem);
         return (st == OQS_SUCCESS);
     }
@@ -342,18 +400,67 @@ bool CryptoEngine::kem_decapsulate(KemAlgorithm algo,
         OQS_KEM* kem = OQS_KEM_new(oqs_alg);
         if (!kem) return false;
 
-        std::vector<uint8_t> gs_pk(kem->length_public_key);
-        std::vector<uint8_t> gs_sk(kem->length_secret_key);
-        OQS_KEM_keypair(kem, gs_pk.data(), gs_sk.data());
+        const uint8_t* gs_pk = nullptr;
+        const uint8_t* gs_sk = nullptr;
+        if (!ensure_mlkem_keys(algo, kem, gs_pk, gs_sk)) {
+            OQS_KEM_free(kem);
+            return false;
+        }
+
+        if (ct_len != kem->length_ciphertext) {
+            std::cerr << "[CryptoEngine] ML-KEM decaps: ciphertext size mismatch ("
+                      << ct_len << " vs " << kem->length_ciphertext << ")\n";
+            OQS_KEM_free(kem);
+            return false;
+        }
 
         out_shared_secret.resize(kem->length_shared_secret);
-        OQS_STATUS st = OQS_KEM_decaps(kem, out_shared_secret.data(), ciphertext, gs_sk.data());
+        OQS_STATUS st = OQS_KEM_decaps(kem, out_shared_secret.data(), ciphertext, gs_sk);
         OQS_KEM_free(kem);
         return (st == OQS_SUCCESS);
     }
 #endif
 
     return false;
+}
+
+static bool derive_hkdf_sub(const uint8_t* secret, size_t secret_len,
+                            const char* info, uint8_t* out, size_t out_len) {
+    static const uint8_t hkdf_salt[] = "ZENO-ATLAS-KEM-HKDF-SALT-V1";
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
+    if (!pctx) return false;
+
+    bool ok = (EVP_PKEY_derive_init(pctx) > 0) &&
+              (EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256()) > 0) &&
+              (EVP_PKEY_CTX_set1_hkdf_salt(pctx, hkdf_salt, sizeof(hkdf_salt) - 1) > 0) &&
+              (EVP_PKEY_CTX_set1_hkdf_key(pctx, secret, static_cast<int>(secret_len)) > 0) &&
+              (EVP_PKEY_CTX_add1_hkdf_info(pctx, reinterpret_cast<const unsigned char*>(info),
+                                            static_cast<int>(std::strlen(info))) > 0) &&
+              (EVP_PKEY_derive(pctx, out, &out_len) > 0);
+
+    EVP_PKEY_CTX_free(pctx);
+    return ok;
+}
+
+bool CryptoEngine::set_session_key_from_kem(const uint8_t* shared_secret, size_t ss_len) {
+    if (!shared_secret || ss_len == 0) return false;
+
+    uint8_t derived_key[32];
+    uint8_t derived_salt[12];
+
+    if (!derive_hkdf_sub(shared_secret, ss_len, "atlas-session-key", derived_key, sizeof(derived_key)) ||
+        !derive_hkdf_sub(shared_secret, ss_len, "atlas-session-salt", derived_salt, sizeof(derived_salt))) {
+        return false;
+    }
+
+    std::memcpy(session_key_, derived_key, sizeof(session_key_));
+    std::memcpy(session_salt_, derived_salt, sizeof(session_salt_));
+    OPENSSL_cleanse(derived_key, sizeof(derived_key));
+    OPENSSL_cleanse(derived_salt, sizeof(derived_salt));
+
+    std::cout << "[CryptoEngine] Session key aggiornata da KEM shared secret ("
+              << ss_len << " B) via HKDF-SHA256\n";
+    return true;
 }
 
 } // namespace radio
