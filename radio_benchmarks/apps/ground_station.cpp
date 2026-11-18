@@ -64,6 +64,8 @@ int main(int argc, char* argv[]) {
     // Buffer per memorizzare l'ultimo nonce GS emesso
     uint8_t current_gs_nonce[HANDSHAKE_NONCE_BYTES] = {0};
     uint8_t current_kem_id = 0;
+    size_t current_kem_count = 0;
+    const size_t KEM_HANDSHAKES_PER_ALGO = 10;
     auto t_last_challenge = std::chrono::steady_clock::now();
 
     // Trigger iniziale per inviare periodicamente sfide KEM se non arrivano pacchetti
@@ -230,10 +232,15 @@ int main(int argc, char* argv[]) {
                 csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ","
                     << std::fixed << std::setprecision(3) << dec_time_us << ",OK\n";
 
-                // Avanza al prossimo algoritmo KEM per la prossima sfida
-                auto next_id = static_cast<uint8_t>(kem_algo) + 1;
-                if (next_id > static_cast<uint8_t>(KemAlgorithm::ML_KEM_1024)) next_id = 1;
-                send_challenge(static_cast<KemAlgorithm>(next_id));
+                current_kem_count++;
+                if (current_kem_count >= KEM_HANDSHAKES_PER_ALGO) {
+                    current_kem_count = 0;
+                    auto next_id = static_cast<uint8_t>(kem_algo) + 1;
+                    if (next_id > static_cast<uint8_t>(KemAlgorithm::ML_KEM_1024)) next_id = 1;
+                    send_challenge(static_cast<KemAlgorithm>(next_id));
+                } else {
+                    send_challenge(kem_algo);
+                }
             } else {
                 csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ","
                     << std::fixed << std::setprecision(3) << dec_time_us << ",DECAPS_FAIL\n";
