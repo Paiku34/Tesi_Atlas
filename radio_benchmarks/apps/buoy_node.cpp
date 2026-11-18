@@ -255,14 +255,15 @@ int main(int argc, char* argv[]) {
     std::string device = "/dev/ttyUSB0";
     int baudrate = 57600;
     std::string prov_dir = "provisioning";
-    std::string csv_out = "radio_telemetry_results.csv";
-    std::string kem_csv_out = "radio_kem_results.csv";
+    std::string data_dir = "data";
 
     if (argc > 1) device = argv[1];
     if (argc > 2) baudrate = std::stoi(argv[2]);
     if (argc > 3) prov_dir = argv[3];
-    if (argc > 4) csv_out = argv[4];
-    if (argc > 5) kem_csv_out = argv[5];
+    if (argc > 4) data_dir = argv[4];
+
+    std::string csv_out = data_dir + "/radio_telemetry_results.csv";
+    std::string kem_csv_out = data_dir + "/radio_kem_results.csv";
 
     std::cout << "========================================================\n";
     std::cout << "  ZENO ATLAS - BOA TELEMETRY NODE (Raspberry Pi)\n";

@@ -22,12 +22,14 @@ int main(int argc, char* argv[]) {
     std::string device = "/dev/ttyUSB0";
     int baudrate = 57600;
     std::string prov_dir = "provisioning";
-    std::string csv_out = "ground_station_log.csv";
+    std::string data_dir = "data";
 
     if (argc > 1) device = argv[1];
     if (argc > 2) baudrate = std::stoi(argv[2]);
     if (argc > 3) prov_dir = argv[3];
-    if (argc > 4) csv_out = argv[4];
+    if (argc > 4) data_dir = argv[4];
+
+    std::string csv_out = data_dir + "/ground_station_log.csv";
 
     std::signal(SIGINT, sigint_handler);
 
