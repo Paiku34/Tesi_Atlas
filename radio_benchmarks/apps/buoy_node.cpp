@@ -77,7 +77,7 @@ void run_telemetry_burst(SerialPort& serial,
                          int num_packets,
                          std::vector<TelemetryResult>& results,
                          uint32_t& seq_counter,
-                         int max_retries = 2) {
+                         int max_retries = 0) { // 0 retries per telemetria: riflette il vero PDR di canale senza ARQ
 
     std::cout << "  > Test " << algo_name << " | Payload: " << payload_size << " B | " << num_packets << " pacchetti...\n";
     std::vector<uint8_t> dummy_payload(payload_size);
@@ -148,7 +148,8 @@ void run_kem_handshake_test(SerialPort& serial,
                             KemAlgorithm algo,
                             const std::string& kem_name,
                             int num_handshakes,
-                            std::vector<KemResult>& kem_results) {
+                            std::vector<KemResult>& kem_results,
+                            int max_retries = 0) { // default 0: singolo tentativo per valutare PDR puro dell'handshake senza ARQ
 
     std::cout << "\n>>> INIZIO KEM HANDSHAKE SU CANALE RADIO: " << kem_name << " <<<\n";
 
@@ -215,7 +216,7 @@ void run_kem_handshake_test(SerialPort& serial,
         uint8_t response_tag[PSK_TAG_BYTES];
         crypto.compute_psk_mac(auth_input.data(), auth_input.size(), response_tag);
 
-        // Step 4: Assembla e trasmette il frame di risposta
+        // Step 4: Assembla e trasmette il frame di risposta (con gestione retries parametrabile)
         KemResponseHeader resp_hdr;
         resp_hdr.magic = MAGIC_KEM_RESP;
         resp_hdr.kem_id = static_cast<uint8_t>(algo);
@@ -227,13 +228,22 @@ void run_kem_handshake_test(SerialPort& serial,
         std::memcpy(frame.data() + sizeof(resp_hdr), ciphertext.data(), ciphertext.size());
         std::memcpy(frame.data() + sizeof(resp_hdr) + ciphertext.size(), response_tag, PSK_TAG_BYTES);
 
-        auto t_tx = std::chrono::steady_clock::now();
-        serial.write_exact(frame.data(), frame.size());
-
-        // Attesa ACK finale di sessione
         double rtt_ms = -1.0;
+        bool ack_ok = false;
+        int retries_used = 0;
         int to_ms = adaptive_timeout_ms(frame.size(), 2000);
-        bool ack_ok = wait_for_ack(serial, 0, to_ms, rtt_ms, t_tx, false);
+
+        for (int r = 0; r <= max_retries; ++r) {
+            auto t_tx = std::chrono::steady_clock::now();
+            serial.write_exact(frame.data(), frame.size());
+
+            if (wait_for_ack(serial, 0, to_ms, rtt_ms, t_tx, false)) {
+                ack_ok = true;
+                break;
+            }
+            retries_used++;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
 
         if (ack_ok) {
             const char* label = (algo == KemAlgorithm::X25519) ? HKDF_LABEL_ECDH : HKDF_LABEL_MLKEM;
@@ -246,7 +256,7 @@ void run_kem_handshake_test(SerialPort& serial,
             std::cout << "  [TIMEOUT Handshake " << (h + 1) << "/" << num_handshakes << "]\n";
         }
 
-        kem_results.push_back({kem_name, encap_us, rtt_ms, ack_ok, ciphertext.size(), shared_secret.size(), frame.size(), ack_ok ? 0 : 1});
+        kem_results.push_back({kem_name, encap_us, rtt_ms, ack_ok, ciphertext.size(), shared_secret.size(), frame.size(), retries_used});
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }

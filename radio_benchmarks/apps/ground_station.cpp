@@ -136,11 +136,14 @@ int main(int argc, char* argv[]) {
             total_telemetry++;
             AckPacket ack{MAGIC_ACK, header.seq_num, 0x00};
 
-            if (header.seq_num <= last_seen_seq) {
-                replay_drops++;
-                ack.status_code = 0x01; // Replay
+            if (header.seq_num == last_seen_seq) {
+                // Ritrasmissione dell'ultimo pacchetto: reinvia ACK OK (0x00) senza riprocessare
+                ack.status_code = 0x00;
                 serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
-                csv << now_ms << ",TELEMETRY," << header.seq_num << "," << header.len << ",0.000,REPLAY\n";
+                continue;
+            } else if (header.seq_num < last_seen_seq) {
+                // Pacchetto anomalo obsoleto: scarta
+                replay_drops++;
                 continue;
             }
 
