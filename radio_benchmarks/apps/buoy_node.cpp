@@ -75,7 +75,7 @@ void run_telemetry_burst(SerialPort& serial,
                          int num_packets,
                          std::vector<TelemetryResult>& results,
                          uint32_t& seq_counter,
-                         int max_retries = 0) { // 0 retries per telemetria: riflette il vero PDR di canale senza ARQ
+                         int max_retries = 0) {
 
     std::cout << "  > Test " << algo_name << " | Payload: " << payload_size << " B | " << num_packets << " pacchetti...\n";
     std::vector<uint8_t> dummy_payload(payload_size);
@@ -92,10 +92,10 @@ void run_telemetry_burst(SerialPort& serial,
         size_t frame_bytes = 0;
         double overhead_pct = 0.0;
 
-        for (int r = 0; r <= max_retries; ++r) {
-            // Avvio misura E2E completa: include cifratura, framing, TX uplink, decifratura GS e RX ACK
-            auto t_e2e_start = std::chrono::steady_clock::now();
+        // Avvio misura E2E completa (include eventuali ritrasmissioni fino all'ACK)
+        auto t_e2e_start = std::chrono::steady_clock::now();
 
+        for (int r = 0; r <= max_retries; ++r) {
             std::vector<uint8_t> ciphertext;
             uint8_t tag[AEAD_TAG_LEN];
             bool ok = crypto.encrypt(algo, current_seq, dummy_payload.data(), dummy_payload.size(), ciphertext, tag);
@@ -125,8 +125,9 @@ void run_telemetry_burst(SerialPort& serial,
                 ack_ok = true;
                 break;
             }
-            retries_used++;
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (r < max_retries) {
+                retries_used++;
+            }
         }
 
         double goodput_bps = (ack_ok && e2e_latency_ms > 0) ? (payload_size * 8.0 / (e2e_latency_ms / 1000.0)) : 0.0;
@@ -138,6 +139,7 @@ void run_telemetry_burst(SerialPort& serial,
 
 // -----------------------------------------------------------------------------
 // Test KEM Handshake autenticato con PSK - Flusso puro a 2 messaggi (+ ACK)
+// I retry dei KEM sono guidati dalla Ground Station (che re-invia la Challenge)
 // -----------------------------------------------------------------------------
 void run_kem_handshake_test(SerialPort& serial,
                             CryptoEngine& crypto,
@@ -145,7 +147,7 @@ void run_kem_handshake_test(SerialPort& serial,
                             const std::string& kem_name,
                             int num_handshakes,
                             std::vector<KemResult>& kem_results,
-                            int max_retries = 0) { // default 0: singolo tentativo per valutare PDR puro dell'handshake senza ARQ
+                            int max_retries = 0) {
 
     std::cout << "\n>>> INIZIO KEM HANDSHAKE SU CANALE RADIO: " << kem_name << " <<<\n";
 
@@ -178,8 +180,7 @@ void run_kem_handshake_test(SerialPort& serial,
 
             if (!got_challenge) {
                 std::cerr << "  [WARN] Timeout attesa Challenge GS per " << kem_name << "\n";
-                retries_used++;
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (r < max_retries) retries_used++;
                 continue;
             }
 
@@ -190,7 +191,7 @@ void run_kem_handshake_test(SerialPort& serial,
 
             if (!crypto.verify_psk_mac(challenge_data, sizeof(challenge_data), chlng.auth_tag)) {
                 std::cerr << "  [AUTH_FAIL] Challenge GS non valida (MAC PSK errato)!\n";
-                retries_used++;
+                if (r < max_retries) retries_used++;
                 continue;
             }
 
@@ -244,13 +245,15 @@ void run_kem_handshake_test(SerialPort& serial,
                 ack_ok = true;
                 break;
             }
-            retries_used++;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (r < max_retries) {
+                retries_used++;
+            }
         }
 
         if (ack_ok) {
             std::cout << "  [OK Handshake " << (h + 1) << "/" << num_handshakes << "] "
-                      << "CT: " << ct_bytes << " B | Total HS: " << total_hs_bytes << " B\n";
+                      << "CT: " << ct_bytes << " B | Total HS: " << total_hs_bytes << " B"
+                      << " | Retries: " << retries_used << "\n";
         } else {
             std::cout << "  [TIMEOUT Handshake " << (h + 1) << "/" << num_handshakes << "]\n";
         }
@@ -265,11 +268,13 @@ int main(int argc, char* argv[]) {
     int baudrate = 57600;
     std::string prov_dir = "provisioning";
     std::string data_dir = "data";
+    int max_retries = 0;
 
     if (argc > 1) device = argv[1];
     if (argc > 2) baudrate = std::stoi(argv[2]);
     if (argc > 3) prov_dir = argv[3];
     if (argc > 4) data_dir = argv[4];
+    if (argc > 5) max_retries = std::stoi(argv[5]);
 
     std::string csv_out = data_dir + "/radio_telemetry_results.csv";
     std::string kem_csv_out = data_dir + "/radio_kem_results.csv";
@@ -278,6 +283,7 @@ int main(int argc, char* argv[]) {
     std::cout << "  ZENO ATLAS - BOA TELEMETRY NODE (Raspberry Pi)\n";
     std::cout << "  Device: " << device << " (" << baudrate << " baud)\n";
     std::cout << "  Provisioning dir: " << prov_dir << "\n";
+    std::cout << "  Max Retries: " << max_retries << "\n";
     std::cout << "========================================================\n\n";
 
     SerialPort serial;
@@ -314,7 +320,7 @@ int main(int argc, char* argv[]) {
     };
 
     for (const auto& ka : kem_algos) {
-        run_kem_handshake_test(serial, crypto, ka.first, ka.second, HANDSHAKES_PER_RUN, kem_results);
+        run_kem_handshake_test(serial, crypto, ka.first, ka.second, HANDSHAKES_PER_RUN, kem_results, max_retries);
     }
 
     // 2. AEAD Telemetry Suite
@@ -329,7 +335,7 @@ int main(int argc, char* argv[]) {
     for (const auto& alg : algos) {
         std::cout << "\n--- AVVIO TEST TELEMETRIA: " << alg.second << " ---\n";
         for (size_t sz : payloads) {
-            run_telemetry_burst(serial, crypto, alg.first, alg.second, sz, PACKETS_PER_RUN, results, seq_counter);
+            run_telemetry_burst(serial, crypto, alg.first, alg.second, sz, PACKETS_PER_RUN, results, seq_counter, max_retries);
         }
     }
 

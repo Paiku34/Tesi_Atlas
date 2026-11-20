@@ -26,11 +26,13 @@ int main(int argc, char* argv[]) {
     int baudrate = 57600;
     std::string prov_dir = "provisioning";
     std::string data_dir = "data";
+    int max_retries = 0;
 
     if (argc > 1) device = argv[1];
     if (argc > 2) baudrate = std::stoi(argv[2]);
     if (argc > 3) prov_dir = argv[3];
     if (argc > 4) data_dir = argv[4];
+    if (argc > 5) max_retries = std::stoi(argv[5]);
 
     std::string csv_out = data_dir + "/ground_station_log.csv";
     std::string kem_csv_out = data_dir + "/ground_station_kem_results.csv";
@@ -41,6 +43,7 @@ int main(int argc, char* argv[]) {
     std::cout << "  ZENO ATLAS - GROUND STATION (Zeno PC Receiver)\n";
     std::cout << "  Device: " << device << " (" << baudrate << " baud)\n";
     std::cout << "  Provisioning dir: " << prov_dir << "\n";
+    std::cout << "  Max Retries: " << max_retries << "\n";
     std::cout << "  Log CSV: " << csv_out << "\n";
     std::cout << "  KEM CSV: " << kem_csv_out << "\n";
     std::cout << "========================================================\n\n";
@@ -61,7 +64,7 @@ int main(int argc, char* argv[]) {
     csv << "Timestamp_epoch_ms,Type,Id,Payload_B,Status\n";
 
     std::ofstream kem_csv(kem_csv_out);
-    kem_csv << "Timestamp_epoch_ms,KEM_Id,Attempt,E2E_Handshake_ms,Success,Ciphertext_B,Status\n";
+    kem_csv << "Timestamp_epoch_ms,KEM_Id,Attempt,E2E_Handshake_ms,Success,Ciphertext_B,Retries,Status\n";
 
     uint32_t last_seen_seq = 0;
     size_t total_telemetry = 0;
@@ -74,14 +77,20 @@ int main(int argc, char* argv[]) {
     uint8_t current_gs_nonce[HANDSHAKE_NONCE_BYTES] = {0};
     uint8_t current_kem_id = static_cast<uint8_t>(KemAlgorithm::X25519);
     size_t current_kem_attempt = 0;
+    int current_kem_retries = 0;
     const size_t KEM_HANDSHAKES_PER_ALGO = 50;
     bool kem_campaign_active = false;
     bool waiting_kem_response = false;
-    std::chrono::steady_clock::time_point t_hs_start;
+    std::chrono::steady_clock::time_point t_hs_attempt_start;
+    std::chrono::steady_clock::time_point t_hs_send;
 
-    auto send_challenge = [&](KemAlgorithm alg) {
+    auto send_challenge = [&](KemAlgorithm alg, bool is_retry = false) {
         current_kem_id = static_cast<uint8_t>(alg);
-        t_hs_start = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        if (!is_retry) {
+            t_hs_attempt_start = now;
+        }
+        t_hs_send = now;
 
         randombytes_buf(current_gs_nonce, sizeof(current_gs_nonce));
 
@@ -100,6 +109,7 @@ int main(int argc, char* argv[]) {
     };
 
     auto advance_kem_state = [&]() {
+        current_kem_retries = 0;
         current_kem_attempt++;
         if (current_kem_attempt >= KEM_HANDSHAKES_PER_ALGO) {
             current_kem_attempt = 0;
@@ -113,7 +123,24 @@ int main(int argc, char* argv[]) {
             current_kem_id = next_id;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        send_challenge(static_cast<KemAlgorithm>(current_kem_id));
+        send_challenge(static_cast<KemAlgorithm>(current_kem_id), false);
+    };
+
+    auto handle_kem_failure_or_retry = [&](int64_t now_ms, size_t ct_len, const std::string& status_str) {
+        if (current_kem_retries < max_retries) {
+            current_kem_retries++;
+            std::cout << "[RETRY KEM " << current_kem_retries << "/" << max_retries << "] Alg: "
+                      << static_cast<int>(current_kem_id) << " | Tentativo "
+                      << (current_kem_attempt + 1) << "/" << KEM_HANDSHAKES_PER_ALGO
+                      << " (" << status_str << ")\n";
+            send_challenge(static_cast<KemAlgorithm>(current_kem_id), true);
+        } else {
+            kem_csv << now_ms << "," << static_cast<int>(current_kem_id) << ","
+                    << (current_kem_attempt + 1) << ",TIMEOUT,0," << ct_len << ","
+                    << current_kem_retries << "," << status_str << "\n";
+            waiting_kem_response = false;
+            advance_kem_state();
+        }
     };
 
     std::cout << "[OK] Ground station pronta. In attesa di MAGIC_START dalla boa (termina con Ctrl+C)...\n";
@@ -123,17 +150,14 @@ int main(int argc, char* argv[]) {
         if (!serial.read_byte(magic, 200)) {
             if (kem_campaign_active && waiting_kem_response) {
                 auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - t_hs_start).count();
+                    std::chrono::steady_clock::now() - t_hs_send).count();
                 if (elapsed_ms >= 3000) {
                     auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
                     std::cout << "[TIMEOUT KEM] Alg: " << static_cast<int>(current_kem_id)
                               << " | Tentativo " << (current_kem_attempt + 1) << "/" << KEM_HANDSHAKES_PER_ALGO << "\n";
-                    kem_csv << now_ms << "," << static_cast<int>(current_kem_id) << ","
-                            << (current_kem_attempt + 1) << ",TIMEOUT,0,0,TIMEOUT\n";
                     csv << now_ms << ",KEM," << static_cast<int>(current_kem_id) << ",0,TIMEOUT\n";
-                    waiting_kem_response = false;
-                    advance_kem_state();
+                    handle_kem_failure_or_retry(now_ms, 0, "TIMEOUT");
                 }
             }
             continue;
@@ -149,8 +173,9 @@ int main(int argc, char* argv[]) {
             std::cout << "[SYNC] Ricevuto MAGIC_START dalla boa. Avvio campagna KEM...\n";
             current_kem_id = static_cast<uint8_t>(KemAlgorithm::X25519);
             current_kem_attempt = 0;
+            current_kem_retries = 0;
             kem_campaign_active = true;
-            send_challenge(KemAlgorithm::X25519);
+            send_challenge(KemAlgorithm::X25519, false);
         }
         // -----------------------------------------------------------------
         // RICEZIONE TELEMETRIA AEAD
@@ -226,14 +251,9 @@ int main(int argc, char* argv[]) {
                 resp_hdr.ct_len > MAX_VALID_PACKET_LEN) {
                 corrupted_frames++;
                 csv << now_ms << ",KEM," << static_cast<int>(current_kem_id) << ",0,CORRUPTED_TRUNCATED\n";
+                serial.flush();
                 if (kem_campaign_active && waiting_kem_response) {
-                    kem_csv << now_ms << "," << static_cast<int>(current_kem_id) << ","
-                            << (current_kem_attempt + 1) << ",TIMEOUT,0,0,CORRUPTED_TRUNCATED\n";
-                    waiting_kem_response = false;
-                    serial.flush();
-                    advance_kem_state();
-                } else {
-                    serial.flush();
+                    handle_kem_failure_or_retry(now_ms, 0, "CORRUPTED_TRUNCATED");
                 }
                 continue;
             }
@@ -245,14 +265,9 @@ int main(int argc, char* argv[]) {
                 !serial.read_exact(response_tag, PSK_TAG_BYTES, 300)) {
                 corrupted_frames++;
                 csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << resp_hdr.ct_len << ",CORRUPTED_TRUNCATED\n";
+                serial.flush();
                 if (kem_campaign_active && waiting_kem_response) {
-                    kem_csv << now_ms << "," << static_cast<int>(resp_hdr.kem_id) << ","
-                            << (current_kem_attempt + 1) << ",TIMEOUT,0," << resp_hdr.ct_len << ",CORRUPTED_TRUNCATED\n";
-                    waiting_kem_response = false;
-                    serial.flush();
-                    advance_kem_state();
-                } else {
-                    serial.flush();
+                    handle_kem_failure_or_retry(now_ms, resp_hdr.ct_len, "CORRUPTED_TRUNCATED");
                 }
                 continue;
             }
@@ -274,10 +289,7 @@ int main(int argc, char* argv[]) {
                 serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
                 csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ",PSK_AUTH_FAIL\n";
                 if (kem_campaign_active && waiting_kem_response) {
-                    kem_csv << now_ms << "," << static_cast<int>(resp_hdr.kem_id) << ","
-                            << (current_kem_attempt + 1) << ",TIMEOUT,0," << ciphertext.size() << ",PSK_AUTH_FAIL\n";
-                    waiting_kem_response = false;
-                    advance_kem_state();
+                    handle_kem_failure_or_retry(now_ms, ciphertext.size(), "PSK_AUTH_FAIL");
                 }
                 continue;
             }
@@ -291,9 +303,9 @@ int main(int argc, char* argv[]) {
                 crypto.derive_session_keys(label, shared_secret.data(), shared_secret.size());
             }
 
-            // Stop timer E2E dell'intero scambio (Challenge -> Response -> Decaps + HKDF)
+            // Stop timer E2E dell'intero scambio (include eventuali retries fino al completamento)
             double e2e_hs_ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - t_hs_start).count();
+                std::chrono::steady_clock::now() - t_hs_attempt_start).count();
 
             // Step 3: L'ACK parte solo dopo aver completato anche l'HKDF
             AckPacket ack{MAGIC_ACK, 0, static_cast<uint8_t>(ok ? 0x00 : 0x02)};
@@ -302,22 +314,20 @@ int main(int argc, char* argv[]) {
             if (ok) {
                 std::cout << "[OK KEM Handshake] Alg: " << static_cast<int>(resp_hdr.kem_id)
                           << " | CT Len: " << ciphertext.size() << " B | E2E: "
-                          << std::fixed << std::setprecision(1) << e2e_hs_ms << " ms\n";
+                          << std::fixed << std::setprecision(1) << e2e_hs_ms << " ms"
+                          << " | Retries: " << current_kem_retries << "\n";
                 csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ",OK\n";
                 if (kem_campaign_active && waiting_kem_response) {
                     kem_csv << now_ms << "," << static_cast<int>(resp_hdr.kem_id) << ","
                             << (current_kem_attempt + 1) << "," << std::fixed << std::setprecision(3) << e2e_hs_ms
-                            << ",1," << ciphertext.size() << ",OK\n";
+                            << ",1," << ciphertext.size() << "," << current_kem_retries << ",OK\n";
                     waiting_kem_response = false;
                     advance_kem_state();
                 }
             } else {
                 csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ",DECAPS_FAIL\n";
                 if (kem_campaign_active && waiting_kem_response) {
-                    kem_csv << now_ms << "," << static_cast<int>(resp_hdr.kem_id) << ","
-                            << (current_kem_attempt + 1) << ",TIMEOUT,0," << ciphertext.size() << ",DECAPS_FAIL\n";
-                    waiting_kem_response = false;
-                    advance_kem_state();
+                    handle_kem_failure_or_retry(now_ms, ciphertext.size(), "DECAPS_FAIL");
                 }
             }
         }
