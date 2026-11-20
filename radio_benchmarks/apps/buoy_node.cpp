@@ -299,7 +299,8 @@ int main(int argc, char* argv[]) {
     std::vector<KemResult> kem_results;
 
     const std::vector<size_t> payloads = {8, 16, 32, 64, 128, 256};
-    const int PACKETS_PER_RUN = 50;
+    const int PACKETS_PER_RUN = 100;
+    const int HANDSHAKES_PER_RUN = 50;
 
     // 1. KEM Handshake Suite
     const std::vector<std::pair<KemAlgorithm, std::string>> kem_algos = {
@@ -310,7 +311,7 @@ int main(int argc, char* argv[]) {
     };
 
     for (const auto& ka : kem_algos) {
-        run_kem_handshake_test(serial, crypto, ka.first, ka.second, 10, kem_results);
+        run_kem_handshake_test(serial, crypto, ka.first, ka.second, HANDSHAKES_PER_RUN, kem_results);
     }
 
     // 2. AEAD Telemetry Suite
