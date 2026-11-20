@@ -10,6 +10,8 @@ constexpr uint8_t MAGIC_TELEMETRY   = 0xAA; // Uplink Telemetria Boa -> Ground S
 constexpr uint8_t MAGIC_ACK         = 0x55; // Downlink ACK Ground Station -> Boa
 constexpr uint8_t MAGIC_KEM_CHLNG   = 0x43; // 'C' Downlink Challenge GS -> Boa
 constexpr uint8_t MAGIC_KEM_RESP    = 0x4B; // 'K' Uplink Response Boa -> GS
+constexpr uint8_t MAGIC_START       = 0x40; // START Boa -> GS
+
 
 // Parametri conformi 1-to-1 a benchmark_core.hpp
 constexpr size_t HANDSHAKE_NONCE_BYTES = 32; // 256-bit nonce casuale GS e Boa

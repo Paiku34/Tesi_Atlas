@@ -9,9 +9,12 @@
 #include <iomanip>
 #include <csignal>
 #include <thread>
+#include <cstring>
 #include <sodium.h>
 
 using namespace radio;
+
+constexpr size_t MAX_VALID_PACKET_LEN = 4096;
 
 static volatile bool g_running = true;
 void sigint_handler(int) {
@@ -30,6 +33,7 @@ int main(int argc, char* argv[]) {
     if (argc > 4) data_dir = argv[4];
 
     std::string csv_out = data_dir + "/ground_station_log.csv";
+    std::string kem_csv_out = data_dir + "/ground_station_kem_results.csv";
 
     std::signal(SIGINT, sigint_handler);
 
@@ -38,6 +42,7 @@ int main(int argc, char* argv[]) {
     std::cout << "  Device: " << device << " (" << baudrate << " baud)\n";
     std::cout << "  Provisioning dir: " << prov_dir << "\n";
     std::cout << "  Log CSV: " << csv_out << "\n";
+    std::cout << "  KEM CSV: " << kem_csv_out << "\n";
     std::cout << "========================================================\n\n";
 
     SerialPort serial;
@@ -53,24 +58,31 @@ int main(int argc, char* argv[]) {
     }
 
     std::ofstream csv(csv_out);
-    csv << "Timestamp_epoch_ms,Type,Id,Payload_B,Crypto_Time_us,Status\n";
+    csv << "Timestamp_epoch_ms,Type,Id,Payload_B,Status\n";
+
+    std::ofstream kem_csv(kem_csv_out);
+    kem_csv << "Timestamp_epoch_ms,KEM_Id,Attempt,E2E_Handshake_ms,Success,Ciphertext_B,Status\n";
 
     uint32_t last_seen_seq = 0;
     size_t total_telemetry = 0;
     size_t total_kem = 0;
     size_t auth_failures = 0;
     size_t replay_drops = 0;
+    size_t corrupted_frames = 0;
 
-    // Buffer per memorizzare l'ultimo nonce GS emesso
+    // Stato Handshake KEM guidato dalla Ground Station
     uint8_t current_gs_nonce[HANDSHAKE_NONCE_BYTES] = {0};
-    uint8_t current_kem_id = 0;
-    size_t current_kem_count = 0;
-    const size_t KEM_HANDSHAKES_PER_ALGO = 10;
-    auto t_last_challenge = std::chrono::steady_clock::now();
+    uint8_t current_kem_id = static_cast<uint8_t>(KemAlgorithm::X25519);
+    size_t current_kem_attempt = 0;
+    const size_t KEM_HANDSHAKES_PER_ALGO = 50;
+    bool kem_campaign_active = false;
+    bool waiting_kem_response = false;
+    std::chrono::steady_clock::time_point t_hs_start;
 
-    // Trigger iniziale per inviare periodicamente sfide KEM se non arrivano pacchetti
     auto send_challenge = [&](KemAlgorithm alg) {
         current_kem_id = static_cast<uint8_t>(alg);
+        t_hs_start = std::chrono::steady_clock::now();
+
         randombytes_buf(current_gs_nonce, sizeof(current_gs_nonce));
 
         uint8_t challenge_data[1 + HANDSHAKE_NONCE_BYTES];
@@ -84,22 +96,45 @@ int main(int argc, char* argv[]) {
         crypto.compute_psk_mac(challenge_data, sizeof(challenge_data), chlng_hdr.auth_tag);
 
         serial.write_exact(reinterpret_cast<const uint8_t*>(&chlng_hdr), sizeof(chlng_hdr));
-        t_last_challenge = std::chrono::steady_clock::now();
+        waiting_kem_response = true;
     };
 
-    std::cout << "[OK] Ground station pronta. In ascolto...\n";
+    auto advance_kem_state = [&]() {
+        current_kem_attempt++;
+        if (current_kem_attempt >= KEM_HANDSHAKES_PER_ALGO) {
+            current_kem_attempt = 0;
+            uint8_t next_id = current_kem_id + 1;
+            if (next_id > static_cast<uint8_t>(KemAlgorithm::ML_KEM_1024)) {
+                kem_campaign_active = false;
+                waiting_kem_response = false;
+                std::cout << "[OK] Campagna KEM completata sulla Ground Station.\n";
+                return;
+            }
+            current_kem_id = next_id;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        send_challenge(static_cast<KemAlgorithm>(current_kem_id));
+    };
 
-    // Invia prima sfida di default (X25519)
-    send_challenge(KemAlgorithm::X25519);
+    std::cout << "[OK] Ground station pronta. In attesa di MAGIC_START dalla boa (termina con Ctrl+C)...\n";
 
     while (g_running) {
         uint8_t magic = 0;
-        if (!serial.read_byte(magic, 500)) {
-            // Se inattivo da più di 4 secondi, reinvia la sfida per facilitare il sync all'avvio della boa
-            auto elapsed_s = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now() - t_last_challenge).count();
-            if (elapsed_s >= 4) {
-                send_challenge(static_cast<KemAlgorithm>(current_kem_id));
+        if (!serial.read_byte(magic, 200)) {
+            if (kem_campaign_active && waiting_kem_response) {
+                auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t_hs_start).count();
+                if (elapsed_ms >= 3000) {
+                    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    std::cout << "[TIMEOUT KEM] Alg: " << static_cast<int>(current_kem_id)
+                              << " | Tentativo " << (current_kem_attempt + 1) << "/" << KEM_HANDSHAKES_PER_ALGO << "\n";
+                    kem_csv << now_ms << "," << static_cast<int>(current_kem_id) << ","
+                            << (current_kem_attempt + 1) << ",TIMEOUT,0,0,TIMEOUT\n";
+                    csv << now_ms << ",KEM," << static_cast<int>(current_kem_id) << ",0,TIMEOUT\n";
+                    waiting_kem_response = false;
+                    advance_kem_state();
+                }
             }
             continue;
         }
@@ -108,13 +143,26 @@ int main(int argc, char* argv[]) {
             std::chrono::system_clock::now().time_since_epoch()).count();
 
         // -----------------------------------------------------------------
+        // SEGNALE INIZIALE DI SINCRONIZZAZIONE DALLA BOA
+        // -----------------------------------------------------------------
+        if (magic == MAGIC_START) {
+            std::cout << "[SYNC] Ricevuto MAGIC_START dalla boa. Avvio campagna KEM...\n";
+            current_kem_id = static_cast<uint8_t>(KemAlgorithm::X25519);
+            current_kem_attempt = 0;
+            kem_campaign_active = true;
+            send_challenge(KemAlgorithm::X25519);
+        }
+        // -----------------------------------------------------------------
         // RICEZIONE TELEMETRIA AEAD
         // -----------------------------------------------------------------
-        if (magic == MAGIC_TELEMETRY) {
+        else if (magic == MAGIC_TELEMETRY) {
             TelemetryHeader header;
             header.magic = magic;
 
-            if (!serial.read_exact(reinterpret_cast<uint8_t*>(&header) + 1, sizeof(TelemetryHeader) - 1, 200)) {
+            if (!serial.read_exact(reinterpret_cast<uint8_t*>(&header) + 1, sizeof(TelemetryHeader) - 1, 200) ||
+                header.len > MAX_VALID_PACKET_LEN) {
+                corrupted_frames++;
+                csv << now_ms << ",TELEMETRY,0,0,CORRUPTED_TRUNCATED\n";
                 serial.flush();
                 continue;
             }
@@ -131,6 +179,8 @@ int main(int argc, char* argv[]) {
             }
 
             if (!read_ok) {
+                corrupted_frames++;
+                csv << now_ms << ",TELEMETRY," << header.seq_num << "," << header.len << ",CORRUPTED_TRUNCATED\n";
                 serial.flush();
                 continue;
             }
@@ -139,37 +189,30 @@ int main(int argc, char* argv[]) {
             AckPacket ack{MAGIC_ACK, header.seq_num, 0x00};
 
             if (header.seq_num == last_seen_seq) {
-                // Ritrasmissione dell'ultimo pacchetto: reinvia ACK OK (0x00) senza riprocessare
                 ack.status_code = 0x00;
                 serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
                 continue;
             } else if (header.seq_num < last_seen_seq) {
-                // Pacchetto anomalo obsoleto: scarta
                 replay_drops++;
                 continue;
             }
 
-            auto t_dec_start = std::chrono::high_resolution_clock::now();
             std::vector<uint8_t> plaintext;
             bool ok = crypto.decrypt(algo, header.seq_num, ciphertext.data(), ciphertext.size(), in_tag, plaintext);
-            auto t_dec_end = std::chrono::high_resolution_clock::now();
-            double dec_time_us = std::chrono::duration<double, std::micro>(t_dec_end - t_dec_start).count();
 
             if (!ok) {
                 auth_failures++;
                 ack.status_code = 0x02; // Auth Fail
-                csv << now_ms << ",TELEMETRY," << header.seq_num << "," << header.len << ","
-                    << std::fixed << std::setprecision(3) << dec_time_us << ",AUTH_FAIL\n";
+                csv << now_ms << ",TELEMETRY," << header.seq_num << "," << header.len << ",AUTH_FAIL\n";
             } else {
                 last_seen_seq = header.seq_num;
                 std::cout << "[OK Telemetria] Rx Seq " << header.seq_num
                           << " | Algo: " << static_cast<int>(header.algo_id)
-                          << " | Len: " << plaintext.size() << " B | Decrypt: "
-                          << std::fixed << std::setprecision(1) << dec_time_us << " us\n";
-                csv << now_ms << ",TELEMETRY," << header.seq_num << "," << plaintext.size() << ","
-                    << std::fixed << std::setprecision(3) << dec_time_us << ",OK\n";
+                          << " | Len: " << plaintext.size() << " B\n";
+                csv << now_ms << ",TELEMETRY," << header.seq_num << "," << plaintext.size() << ",OK\n";
             }
 
+            // L'ACK parte solo dopo aver completato la decifratura
             serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
         }
         // -----------------------------------------------------------------
@@ -179,8 +222,19 @@ int main(int argc, char* argv[]) {
             KemResponseHeader resp_hdr;
             resp_hdr.magic = magic;
 
-            if (!serial.read_exact(reinterpret_cast<uint8_t*>(&resp_hdr) + 1, sizeof(KemResponseHeader) - 1, 200)) {
-                serial.flush();
+            if (!serial.read_exact(reinterpret_cast<uint8_t*>(&resp_hdr) + 1, sizeof(KemResponseHeader) - 1, 200) ||
+                resp_hdr.ct_len > MAX_VALID_PACKET_LEN) {
+                corrupted_frames++;
+                csv << now_ms << ",KEM," << static_cast<int>(current_kem_id) << ",0,CORRUPTED_TRUNCATED\n";
+                if (kem_campaign_active && waiting_kem_response) {
+                    kem_csv << now_ms << "," << static_cast<int>(current_kem_id) << ","
+                            << (current_kem_attempt + 1) << ",TIMEOUT,0,0,CORRUPTED_TRUNCATED\n";
+                    waiting_kem_response = false;
+                    serial.flush();
+                    advance_kem_state();
+                } else {
+                    serial.flush();
+                }
                 continue;
             }
 
@@ -189,7 +243,17 @@ int main(int argc, char* argv[]) {
 
             if (!serial.read_exact(ciphertext.data(), ciphertext.size(), 3000) ||
                 !serial.read_exact(response_tag, PSK_TAG_BYTES, 300)) {
-                serial.flush();
+                corrupted_frames++;
+                csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << resp_hdr.ct_len << ",CORRUPTED_TRUNCATED\n";
+                if (kem_campaign_active && waiting_kem_response) {
+                    kem_csv << now_ms << "," << static_cast<int>(resp_hdr.kem_id) << ","
+                            << (current_kem_attempt + 1) << ",TIMEOUT,0," << resp_hdr.ct_len << ",CORRUPTED_TRUNCATED\n";
+                    waiting_kem_response = false;
+                    serial.flush();
+                    advance_kem_state();
+                } else {
+                    serial.flush();
+                }
                 continue;
             }
 
@@ -208,50 +272,63 @@ int main(int argc, char* argv[]) {
                 auth_failures++;
                 AckPacket ack{MAGIC_ACK, 0, 0x02};
                 serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
-                csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ",0.000,PSK_AUTH_FAIL\n";
+                csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ",PSK_AUTH_FAIL\n";
+                if (kem_campaign_active && waiting_kem_response) {
+                    kem_csv << now_ms << "," << static_cast<int>(resp_hdr.kem_id) << ","
+                            << (current_kem_attempt + 1) << ",TIMEOUT,0," << ciphertext.size() << ",PSK_AUTH_FAIL\n";
+                    waiting_kem_response = false;
+                    advance_kem_state();
+                }
                 continue;
             }
 
-            // Step 2: Decapsulamento locale (misurato)
-            auto t_dec_start = std::chrono::high_resolution_clock::now();
+            // Step 2: Decapsulamento locale + Derivazione chiavi di sessione (HKDF)
             std::vector<uint8_t> shared_secret;
             bool ok = crypto.kem_decapsulate(kem_algo, ciphertext.data(), ciphertext.size(), shared_secret);
-            auto t_dec_end = std::chrono::high_resolution_clock::now();
-            double dec_time_us = std::chrono::duration<double, std::micro>(t_dec_end - t_dec_start).count();
-
-            AckPacket ack{MAGIC_ACK, 0, static_cast<uint8_t>(ok ? 0x00 : 0x02)};
-            serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
 
             if (ok) {
                 const char* label = (kem_algo == KemAlgorithm::X25519) ? HKDF_LABEL_ECDH : HKDF_LABEL_MLKEM;
                 crypto.derive_session_keys(label, shared_secret.data(), shared_secret.size());
+            }
 
+            // Stop timer E2E dell'intero scambio (Challenge -> Response -> Decaps + HKDF)
+            double e2e_hs_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t_hs_start).count();
+
+            // Step 3: L'ACK parte solo dopo aver completato anche l'HKDF
+            AckPacket ack{MAGIC_ACK, 0, static_cast<uint8_t>(ok ? 0x00 : 0x02)};
+            serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
+
+            if (ok) {
                 std::cout << "[OK KEM Handshake] Alg: " << static_cast<int>(resp_hdr.kem_id)
-                          << " | CT Len: " << ciphertext.size() << " B | Decaps: "
-                          << std::fixed << std::setprecision(1) << dec_time_us << " us\n";
-                csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ","
-                    << std::fixed << std::setprecision(3) << dec_time_us << ",OK\n";
-
-                current_kem_count++;
-                if (current_kem_count >= KEM_HANDSHAKES_PER_ALGO) {
-                    current_kem_count = 0;
-                    auto next_id = static_cast<uint8_t>(kem_algo) + 1;
-                    if (next_id > static_cast<uint8_t>(KemAlgorithm::ML_KEM_1024)) next_id = 1;
-                    send_challenge(static_cast<KemAlgorithm>(next_id));
-                } else {
-                    send_challenge(kem_algo);
+                          << " | CT Len: " << ciphertext.size() << " B | E2E: "
+                          << std::fixed << std::setprecision(1) << e2e_hs_ms << " ms\n";
+                csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ",OK\n";
+                if (kem_campaign_active && waiting_kem_response) {
+                    kem_csv << now_ms << "," << static_cast<int>(resp_hdr.kem_id) << ","
+                            << (current_kem_attempt + 1) << "," << std::fixed << std::setprecision(3) << e2e_hs_ms
+                            << ",1," << ciphertext.size() << ",OK\n";
+                    waiting_kem_response = false;
+                    advance_kem_state();
                 }
             } else {
-                csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ","
-                    << std::fixed << std::setprecision(3) << dec_time_us << ",DECAPS_FAIL\n";
+                csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ",DECAPS_FAIL\n";
+                if (kem_campaign_active && waiting_kem_response) {
+                    kem_csv << now_ms << "," << static_cast<int>(resp_hdr.kem_id) << ","
+                            << (current_kem_attempt + 1) << ",TIMEOUT,0," << ciphertext.size() << ",DECAPS_FAIL\n";
+                    waiting_kem_response = false;
+                    advance_kem_state();
+                }
             }
         }
     }
 
     csv.close();
+    kem_csv.close();
     std::cout << "\n=== STATISTICHE SESSIONE ===\n"
               << "Telemetrie ricevute:   " << total_telemetry << "\n"
               << "KEM Handshake eseguiti:" << total_kem << "\n"
+              << "Frame corrotti/tronc.: " << corrupted_frames << "\n"
               << "Replay scartati:       " << replay_drops << "\n"
               << "Errori Autenticazione: " << auth_failures << "\n";
 
