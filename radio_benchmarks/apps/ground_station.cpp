@@ -151,7 +151,7 @@ int main(int argc, char* argv[]) {
             if (kem_campaign_active && waiting_kem_response) {
                 auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - t_hs_send).count();
-                if (elapsed_ms >= 3000) {
+                if (elapsed_ms >= 5000) {
                     auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
                     std::cout << "[TIMEOUT KEM] Alg: " << static_cast<int>(current_kem_id)
@@ -170,11 +170,14 @@ int main(int argc, char* argv[]) {
         // SEGNALE INIZIALE DI SINCRONIZZAZIONE DALLA BOA
         // -----------------------------------------------------------------
         if (magic == MAGIC_START) {
-            std::cout << "[SYNC] Ricevuto MAGIC_START dalla boa. Avvio campagna KEM...\n";
+            std::cout << "[SYNC] Ricevuto MAGIC_START dalla boa. Reset sequenza e avvio KEM...\n";
+            last_seen_seq = 0;
             current_kem_id = static_cast<uint8_t>(KemAlgorithm::X25519);
             current_kem_attempt = 0;
             current_kem_retries = 0;
             kem_campaign_active = true;
+            AckPacket ack{MAGIC_ACK, 0, 0x00};
+            serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
             send_challenge(KemAlgorithm::X25519, false);
         }
         // -----------------------------------------------------------------

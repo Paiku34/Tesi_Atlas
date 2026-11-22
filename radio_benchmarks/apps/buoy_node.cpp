@@ -180,6 +180,7 @@ void run_kem_handshake_test(SerialPort& serial,
 
             if (!got_challenge) {
                 std::cerr << "  [WARN] Timeout attesa Challenge GS per " << kem_name << "\n";
+                serial.flush();
                 if (r < max_retries) retries_used++;
                 continue;
             }
@@ -307,9 +308,17 @@ int main(int argc, char* argv[]) {
     const int PACKETS_PER_RUN = 100;
     const int HANDSHAKES_PER_RUN = 50;
 
-    // Segnale singolo di sincronizzazione iniziale per avviare la campagna sulla Ground Station
-    uint8_t start_sig = MAGIC_START;
-    serial.write_exact(&start_sig, 1);
+    // Sincronizzazione iniziale con la Ground Station (max 5 tentativi)
+    std::cout << "[SYNC] In attesa di aggancio con la Ground Station...\n";
+    for (int i = 0; i < 5; ++i) {
+        uint8_t start_sig = MAGIC_START;
+        serial.write_exact(&start_sig, 1);
+        double dummy = 0.0;
+        if (wait_for_ack(serial, 0, 500, dummy, std::chrono::steady_clock::now(), false)) {
+            std::cout << "[SYNC] Ground Station agganciata.\n";
+            break;
+        }
+    }
 
     // 1. KEM Handshake Suite
     const std::vector<std::pair<KemAlgorithm, std::string>> kem_algos = {
