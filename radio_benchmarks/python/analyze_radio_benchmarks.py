@@ -11,8 +11,11 @@ Questo script analizza i 4 file CSV generati dal benchmark:
     - ground_station_kem_results.csv
     - ground_station_log.csv
 
-Genera grafici accademici (300 DPI, pronti per tesi LaTeX) con intervalli
-di confidenza al 95% (t-Student) su tutte le grandezze statistiche (Goodput, Latenza, KEM Handshake).
+Supporta sia la cartella principale data/ sia sottocartelle per le diverse run/configurazioni:
+  Utilizzo:
+    python3 python/analyze_radio_benchmarks.py                         # analizza data/ e salva in plots/
+    python3 python/analyze_radio_benchmarks.py data/run_64k           # analizza data/run_64k e salva in plots/run_64k
+    python3 python/analyze_radio_benchmarks.py --all                  # analizza data/ e tutte le sue sottocartelle
 """
 
 import os
@@ -23,16 +26,10 @@ import pandas as pd
 import scipy.stats as st
 import matplotlib.pyplot as plt
 
-# -----------------------------------------------------------------------------
-# Configurazione Directory
-# -----------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_DIR = SCRIPT_DIR.parent
-DATA_DIR = BASE_DIR / "data"
-PLOTS_DIR = BASE_DIR / "plots"
-
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(PLOTS_DIR, exist_ok=True)
+DEFAULT_DATA_DIR = BASE_DIR / "data"
+DEFAULT_PLOTS_DIR = BASE_DIR / "plots"
 
 plt.rcParams.update({
     'font.size': 11,
@@ -71,7 +68,6 @@ def clean_label(label: str) -> str:
     return str(label).replace(" (Libsodium)", "").replace(" (liboqs)", "").replace(" (OpenSSL)", "").replace(" (ascon-c)", "")
 
 def compute_ci95(data):
-    """Calcola Media, Deviazione Standard, Margine di Confidenza al 95% (t-Student) e n."""
     clean = np.array(data[~np.isnan(data)], dtype=float)
     n = len(clean)
     if n < 2:
@@ -82,14 +78,13 @@ def compute_ci95(data):
     return mean, np.std(clean, ddof=1), margin, n
 
 # =============================================================================
-# 1. Analisi Telemetria (radio_telemetry_results.csv)
+# 1. Analisi Telemetria
 # =============================================================================
-def plot_telemetry_metrics(csv_path: Path):
+def plot_telemetry_metrics(csv_path: Path, out_dir: Path):
     if not csv_path.exists() or csv_path.stat().st_size == 0:
-        print(f"[SKIP] File non trovato o vuoto: {csv_path.name}")
         return
 
-    print(f"[INFO] Elaborazione telemetria da: {csv_path.name}...")
+    print(f"  [+] Telemetria da: {csv_path.name}")
     df = pd.read_csv(csv_path)
 
     df["Payload_B"] = pd.to_numeric(df["Payload_B"], errors="coerce")
@@ -102,9 +97,7 @@ def plot_telemetry_metrics(csv_path: Path):
 
     algos = df["Algorithm"].unique()
 
-    # -------------------------------------------------------------------------
-    # Grafico 1: Goodput Utile con barre di errore (CI 95%)
-    # -------------------------------------------------------------------------
+    # Grafico 1: Goodput
     fig, ax = plt.subplots(figsize=(8, 5))
     for algo in algos:
         sub = df[(df["Algorithm"] == algo) & (df["Success"] == 1)]
@@ -123,14 +116,10 @@ def plot_telemetry_metrics(csv_path: Path):
     ax.grid(True)
     ax.legend()
     plt.tight_layout()
-    out1 = PLOTS_DIR / "radio_telemetry_goodput_ci95.png"
-    plt.savefig(out1, dpi=300)
+    plt.savefig(out_dir / "radio_telemetry_goodput_ci95.png", dpi=300)
     plt.close()
-    print(f"  -> Salvato: {out1.name}")
 
-    # -------------------------------------------------------------------------
-    # Grafico 2: Latenza End-to-End con barre di errore (CI 95%)
-    # -------------------------------------------------------------------------
+    # Grafico 2: Latenza
     fig, ax = plt.subplots(figsize=(8, 5))
     for algo in algos:
         sub = df[(df["Algorithm"] == algo) & (df["Success"] == 1)]
@@ -149,23 +138,17 @@ def plot_telemetry_metrics(csv_path: Path):
     ax.grid(True)
     ax.legend()
     plt.tight_layout()
-    out2 = PLOTS_DIR / "radio_telemetry_latency_ci95.png"
-    plt.savefig(out2, dpi=300)
+    plt.savefig(out_dir / "radio_telemetry_latency_ci95.png", dpi=300)
     plt.close()
-    print(f"  -> Salvato: {out2.name}")
 
-    # -------------------------------------------------------------------------
-    # Grafico 3: Overhead di Protocollo & Crittografia (%)
-    # -------------------------------------------------------------------------
+    # Grafico 3: Overhead %
     fig, ax = plt.subplots(figsize=(8, 5))
     grouped_oh = df.groupby(["Payload_B", "Algorithm"])["Overhead_pct"].mean().unstack()
     payload_labels = [f"{int(p)} B" for p in grouped_oh.index]
     x = np.arange(len(payload_labels))
     width = 0.8 / len(grouped_oh.columns)
-
     for i, col in enumerate(grouped_oh.columns):
         ax.bar(x + i * width, grouped_oh[col], width, label=clean_label(col), color=PALETTE.get(col, None))
-
     ax.set_title("Overhead di Protocollo e Cifratura sul Canale RF")
     ax.set_xlabel("Dimensione Payload Dati")
     ax.set_ylabel("Overhead [% rispetto al payload grezzo]")
@@ -174,14 +157,10 @@ def plot_telemetry_metrics(csv_path: Path):
     ax.grid(axis='y')
     ax.legend()
     plt.tight_layout()
-    out3 = PLOTS_DIR / "radio_telemetry_overhead.png"
-    plt.savefig(out3, dpi=300)
+    plt.savefig(out_dir / "radio_telemetry_overhead.png", dpi=300)
     plt.close()
-    print(f"  -> Salvato: {out3.name}")
 
-    # -------------------------------------------------------------------------
-    # Grafico 4: Packet Delivery Ratio (PDR)
-    # -------------------------------------------------------------------------
+    # Grafico 4: PDR
     fig, ax = plt.subplots(figsize=(8, 5))
     pdr = (df.groupby(["Payload_B", "Algorithm"])["Success"].mean() * 100.0).unstack()
     for col in pdr.columns:
@@ -194,27 +173,21 @@ def plot_telemetry_metrics(csv_path: Path):
     ax.grid(True)
     ax.legend(loc='lower left')
     plt.tight_layout()
-    out4 = PLOTS_DIR / "radio_telemetry_pdr.png"
-    plt.savefig(out4, dpi=300)
+    plt.savefig(out_dir / "radio_telemetry_pdr.png", dpi=300)
     plt.close()
-    print(f"  -> Salvato: {out4.name}")
 
 # =============================================================================
-# 2. Analisi KEM Handshake (ground_station_kem_results.csv e radio_kem_results.csv)
+# 2. Analisi KEM Handshake
 # =============================================================================
-def plot_kem_metrics(buoy_kem_path: Path, gs_kem_path: Path):
+def plot_kem_metrics(buoy_kem_path: Path, gs_kem_path: Path, out_dir: Path):
     df_buoy = pd.read_csv(buoy_kem_path) if buoy_kem_path.exists() and buoy_kem_path.stat().st_size > 0 else None
     df_gs = pd.read_csv(gs_kem_path) if gs_kem_path.exists() and gs_kem_path.stat().st_size > 0 else None
 
     if df_buoy is None and df_gs is None:
-        print("[SKIP] Nessun file CSV KEM trovato.")
         return
 
-    print("[INFO] Elaborazione KEM Handshake...")
+    print("  [+] KEM Handshake metrics...")
 
-    # -------------------------------------------------------------------------
-    # Grafico 5: Boxplot e Medie con CI 95% Latenza E2E Handshake (da Ground Station)
-    # -------------------------------------------------------------------------
     if df_gs is not None:
         df_gs["Success"] = pd.to_numeric(df_gs["Success"], errors="coerce").fillna(0).astype(int)
         df_gs["E2E_Handshake_ms"] = pd.to_numeric(df_gs["E2E_Handshake_ms"], errors="coerce")
@@ -242,44 +215,34 @@ def plot_kem_metrics(buoy_kem_path: Path, gs_kem_path: Path):
             for patch, color in zip(bplot['boxes'], colors):
                 patch.set_facecolor(color)
                 patch.set_alpha(0.7)
-
             ax.set_title("Latenza End-to-End di Handshake KEM (Canale Radio)")
             ax.set_ylabel("Tempo E2E [ms]")
             ax.grid(axis='y')
             plt.tight_layout()
-            out5 = PLOTS_DIR / "radio_kem_e2e_latency_boxplot.png"
-            plt.savefig(out5, dpi=300)
+            plt.savefig(out_dir / "radio_kem_e2e_latency_boxplot.png", dpi=300)
             plt.close()
-            print(f"  -> Salvato: {out5.name}")
 
-            # Bar chart con CI 95%
+            # Bar chart CI 95%
             fig, ax = plt.subplots(figsize=(7.5, 5))
             x_pos = np.arange(len(labels_to_plot))
             ax.bar(x_pos, means, yerr=cis, capsize=5, color=colors, alpha=0.85, edgecolor='black')
             ax.set_xticks(x_pos)
             ax.set_xticklabels(labels_to_plot)
-            ax.set_title("Latenza Media Handshake KEM con Intervalli di Confidenza (IC 95%)")
+            ax.set_title("Latenza Media Handshake KEM (IC 95%)")
             ax.set_ylabel("Latenza Media E2E [ms]")
             ax.grid(axis='y')
             plt.tight_layout()
-            out5b = PLOTS_DIR / "radio_kem_latency_ci95_bar.png"
-            plt.savefig(out5b, dpi=300)
+            plt.savefig(out_dir / "radio_kem_latency_ci95_bar.png", dpi=300)
             plt.close()
-            print(f"  -> Salvato: {out5b.name}")
 
-    # -------------------------------------------------------------------------
-    # Grafico 6: Footprint Trasmesso (Ciphertext vs Handshake Totale)
-    # -------------------------------------------------------------------------
     if df_buoy is not None:
         kem_grouped = df_buoy.groupby("KEM_Algorithm")[["Ciphertext_B", "Total_Handshake_B"]].mean().reset_index()
         fig, ax = plt.subplots(figsize=(7.5, 5))
         x = np.arange(len(kem_grouped))
         w = 0.35
         labels = [clean_label(name) for name in kem_grouped["KEM_Algorithm"]]
-
         ax.bar(x - w/2, kem_grouped["Ciphertext_B"], w, label="Ciphertext KEM", color="#3498db")
         ax.bar(x + w/2, kem_grouped["Total_Handshake_B"], w, label="Footprint Totale Handshake", color="#2c3e50")
-
         ax.set_title("Footprint sul Canale RF per Negoziazione Chiave")
         ax.set_ylabel("Dimensione Trasmessa [Byte]")
         ax.set_xticks(x)
@@ -287,25 +250,19 @@ def plot_kem_metrics(buoy_kem_path: Path, gs_kem_path: Path):
         ax.grid(axis='y')
         ax.legend()
         plt.tight_layout()
-        out6 = PLOTS_DIR / "radio_kem_footprint_bytes.png"
-        plt.savefig(out6, dpi=300)
+        plt.savefig(out_dir / "radio_kem_footprint_bytes.png", dpi=300)
         plt.close()
-        print(f"  -> Salvato: {out6.name}")
 
 # =============================================================================
-# 3. Analisi Log Ground Station (ground_station_log.csv)
+# 3. Analisi Log Ground Station
 # =============================================================================
-def plot_gs_log_metrics(log_path: Path):
+def plot_gs_log_metrics(log_path: Path, out_dir: Path):
     if not log_path.exists() or log_path.stat().st_size == 0:
-        print(f"[SKIP] File non trovato o vuoto: {log_path.name}")
         return
 
-    print(f"[INFO] Elaborazione log Ground Station da: {log_path.name}...")
+    print(f"  [+] Ground Station log da: {log_path.name}")
     df = pd.read_csv(log_path)
-    
-    # Conteggio cause di fallimento/successo
     status_counts = df.groupby(["Type", "Status"]).size().unstack(fill_value=0)
-    
     fig, ax = plt.subplots(figsize=(8, 5))
     status_counts.plot(kind="bar", stacked=True, ax=ax, colormap="viridis")
     ax.set_title("Stato e Cause di Perdita dei Pacchetti Ricevuti (Ground Station)")
@@ -315,35 +272,74 @@ def plot_gs_log_metrics(log_path: Path):
     ax.grid(axis='y')
     ax.legend(title="Esito Ricezione")
     plt.tight_layout()
-    out7 = PLOTS_DIR / "ground_station_packet_outcomes.png"
-    plt.savefig(out7, dpi=300)
+    plt.savefig(out_dir / "ground_station_packet_outcomes.png", dpi=300)
     plt.close()
-    print(f"  -> Salvato: {out7.name}")
 
 # =============================================================================
-# Main
+# Elaborazione di una cartella specifica
+# =============================================================================
+def process_directory(data_path: Path, plots_path: Path):
+    os.makedirs(plots_path, exist_ok=True)
+    print(f"\n---> Analisi cartella: {data_path.relative_to(BASE_DIR) if data_path.is_relative_to(BASE_DIR) else data_path}")
+    print(f"     Output grafici:   {plots_path.relative_to(BASE_DIR) if plots_path.is_relative_to(BASE_DIR) else plots_path}")
+
+    t_csv = data_path / "radio_telemetry_results.csv"
+    bk_csv = data_path / "radio_kem_results.csv"
+    gk_csv = data_path / "ground_station_kem_results.csv"
+    gl_csv = data_path / "ground_station_log.csv"
+
+    has_any = any(p.exists() and p.stat().st_size > 0 for p in [t_csv, bk_csv, gk_csv, gl_csv])
+    if not has_any:
+        print("     [SKIP] Nessun CSV valido trovato in questa cartella.")
+        return False
+
+    plot_telemetry_metrics(t_csv, plots_path)
+    plot_kem_metrics(bk_csv, gk_csv, plots_path)
+    plot_gs_log_metrics(gl_csv, plots_path)
+    print(f"     [OK] Grafici generati in: {plots_path}")
+    return True
+
+# =============================================================================
+# Main con supporto ad argomenti CLI
 # =============================================================================
 def main():
-    print("=" * 60)
+    print("=" * 65)
     print("  ZENO ATLAS - Analisi Dati e Generazione Grafici Radio")
-    print(f"  Data dir:  {DATA_DIR}")
-    print(f"  Plots dir: {PLOTS_DIR}")
-    print("=" * 60)
+    print("=" * 65)
 
-    # 1. Telemetria (Boa)
-    telemetry_csv = DATA_DIR / "radio_telemetry_results.csv"
-    plot_telemetry_metrics(telemetry_csv)
+    args = sys.argv[1:]
 
-    # 2. KEM Handshake (Boa + GS)
-    buoy_kem_csv = DATA_DIR / "radio_kem_results.csv"
-    gs_kem_csv = DATA_DIR / "ground_station_kem_results.csv"
-    plot_kem_metrics(buoy_kem_csv, gs_kem_csv)
+    # Modalità --all: analizza data/ e tutte le sue sottocartelle
+    if "--all" in args:
+        print("[MODALITÀ] Analisi batch di tutte le sottocartelle in data/...")
+        process_directory(DEFAULT_DATA_DIR, DEFAULT_PLOTS_DIR)
+        for sub in sorted(DEFAULT_DATA_DIR.iterdir()):
+            if sub.is_dir() and not sub.name.startswith("."):
+                out_sub = DEFAULT_PLOTS_DIR / sub.name
+                process_directory(sub, out_sub)
+        print("\n[FINITO] Tutte le configurazioni sono state elaborate!")
+        return
 
-    # 3. Log generale ricezione (GS)
-    gs_log_csv = DATA_DIR / "ground_station_log.csv"
-    plot_gs_log_metrics(gs_log_csv)
+    # Se viene passata una cartella specifica da riga di comando (es. python script.py data/run_64k)
+    if len(args) >= 1 and not args[0].startswith("-"):
+        custom_data = Path(args[0]).resolve()
+        sub_name = custom_data.name if custom_data != DEFAULT_DATA_DIR else ""
+        custom_plots = DEFAULT_PLOTS_DIR / sub_name if sub_name else DEFAULT_PLOTS_DIR
+        process_directory(custom_data, custom_plots)
+        return
 
-    print("\n[OK] Elaborazione completata. Controlla la cartella plots/ per tutti i grafici.")
+    # Comportamento predefinito: analizza data/ e cerca automaticamente se ci sono sottocartelle di run
+    processed_any = process_directory(DEFAULT_DATA_DIR, DEFAULT_PLOTS_DIR)
+    
+    # Se la cartella data/ principale non ha CSV ma contiene sottocartelle di run, le processa tutte
+    subdirs = [d for d in DEFAULT_DATA_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]
+    if subdirs:
+        print(f"\n[INFO] Trovate {len(subdirs)} sottocartelle di run in data/:")
+        for sub in sorted(subdirs):
+            out_sub = DEFAULT_PLOTS_DIR / sub.name
+            process_directory(sub, out_sub)
+
+    print("\n[OK] Elaborazione completata con successo!")
 
 if __name__ == "__main__":
     main()
