@@ -229,7 +229,7 @@ int main(int argc, char* argv[]) {
             }
 
             auto algo = static_cast<CryptoAlgorithm>(header.algo_id);
-            size_t tag_len = (algo == CryptoAlgorithm::BASELINE_CLEAR) ? 0 : AEAD_TAG_LEN;
+            size_t tag_len = is_aead_algorithm(algo) ? AEAD_TAG_LEN : 0;
 
             std::vector<uint8_t> ciphertext(header.len);
             uint8_t in_tag[AEAD_TAG_LEN] = {0};

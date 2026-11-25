@@ -129,7 +129,7 @@ void run_telemetry_burst(SerialPort& serial,
             }
 
             TelemetryHeader header{MAGIC_TELEMETRY, static_cast<uint8_t>(algo), current_seq, static_cast<uint16_t>(ciphertext.size())};
-            size_t tag_len = (algo == CryptoAlgorithm::BASELINE_CLEAR) ? 0 : AEAD_TAG_LEN;
+            size_t tag_len = is_aead_algorithm(algo) ? AEAD_TAG_LEN : 0;
 
             std::vector<uint8_t> frame(sizeof(header) + ciphertext.size() + tag_len);
             std::memcpy(frame.data(), &header, sizeof(header));
@@ -376,6 +376,18 @@ int main(int argc, char* argv[]) {
         for (size_t sz : payloads) {
             run_telemetry_burst(serial, crypto, alg.first, alg.second, sz, PACKETS_PER_RUN, results, seq_counter, max_retries);
         }
+    }
+
+    // 3. RSA Public-Key Telemetry Comparison Suite (solo payload TDM 420 bit = 53 B)
+    constexpr size_t TDM_PAYLOAD_BYTES = 53; // 10 samples x 3 canali x 14 bit = 420 bit -> 53 B
+    const std::vector<std::pair<CryptoAlgorithm, std::string>> rsa_algos = {
+        {CryptoAlgorithm::RSA_1024_E3, "RSA-1024 (e=3, OpenSSL)"},
+        {CryptoAlgorithm::RSA_2048_E3, "RSA-2048 (e=3, OpenSSL)"}
+    };
+
+    for (const auto& alg : rsa_algos) {
+        std::cout << "\n--- AVVIO TEST TELEMETRIA ASIMMETRICA: " << alg.second << " ---\n";
+        run_telemetry_burst(serial, crypto, alg.first, alg.second, TDM_PAYLOAD_BYTES, PACKETS_PER_RUN, results, seq_counter, max_retries);
     }
 
     // Esportazione CSV Telemetria (solo metriche di rete / E2E)

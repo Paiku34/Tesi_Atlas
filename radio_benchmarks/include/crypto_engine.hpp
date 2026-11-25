@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string>
 
+typedef struct evp_pkey_st EVP_PKEY;
+
 namespace radio {
 
 class CryptoEngine {
@@ -92,6 +94,12 @@ private:
     std::vector<uint8_t> gs_mlkem768_sk_;
     std::vector<uint8_t> gs_mlkem1024_pk_;
     std::vector<uint8_t> gs_mlkem1024_sk_;
+
+    // Chiavi statiche GS RSA (e=3, solo confronto uplink)
+    EVP_PKEY* gs_rsa1024_pk_ = nullptr;
+    EVP_PKEY* gs_rsa1024_sk_ = nullptr;
+    EVP_PKEY* gs_rsa2048_pk_ = nullptr;
+    EVP_PKEY* gs_rsa2048_sk_ = nullptr;
 
     bool is_gs_ = false;
 };

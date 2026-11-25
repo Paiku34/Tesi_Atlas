@@ -1,7 +1,12 @@
 #include <iostream>
 #include <fstream>
+#include <cstdio>
 #include <vector>
 #include <sodium.h>
+#include <openssl/bn.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
 
 #if __has_include(<oqs/oqs.h>)
 #include <oqs/oqs.h>
@@ -72,6 +77,49 @@ int main(int argc, char* argv[]) {
 #else
     std::cout << "[WARN] liboqs non disponibile, ML-KEM saltato.\n";
 #endif
+
+    // 4. Chiavi Statiche Ground Station RSA (1024 e 2048 bit, esponente pubblico e = 3)
+    auto gen_rsa_keypair = [&](int bits, const std::string& prefix) {
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+        if (!ctx) {
+            std::cerr << "[ERR] EVP_PKEY_CTX_new_id fallito per RSA-" << bits << "\n";
+            return;
+        }
+        BIGNUM* e_bn = BN_new();
+        BN_set_word(e_bn, 3);
+
+        EVP_PKEY* pkey = nullptr;
+        if (EVP_PKEY_keygen_init(ctx) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, bits) <= 0 ||
+            EVP_PKEY_CTX_set1_rsa_keygen_pubexp(ctx, e_bn) <= 0 ||
+            EVP_PKEY_keygen(ctx, &pkey) <= 0) {
+            std::cerr << "[ERR] Generazione RSA-" << bits << " (e=3) fallita\n";
+            BN_free(e_bn);
+            EVP_PKEY_CTX_free(ctx);
+            return;
+        }
+        BN_free(e_bn);
+        EVP_PKEY_CTX_free(ctx);
+
+        std::string pub_path = out_dir + "/" + prefix + ".pub";
+        std::string sec_path = out_dir + "/" + prefix + ".sec";
+
+        FILE* f_pub = std::fopen(pub_path.c_str(), "wb");
+        if (f_pub) {
+            PEM_write_PUBKEY(f_pub, pkey);
+            std::fclose(f_pub);
+        }
+        FILE* f_sec = std::fopen(sec_path.c_str(), "wb");
+        if (f_sec) {
+            PEM_write_PrivateKey(f_sec, pkey, nullptr, nullptr, 0, nullptr, nullptr);
+            std::fclose(f_sec);
+        }
+        EVP_PKEY_free(pkey);
+        std::cout << "[OK] Generate chiavi GS RSA-" << bits << " (e=3) -> " << prefix << ".pub/.sec\n";
+    };
+
+    gen_rsa_keypair(1024, "gs_rsa1024");
+    gen_rsa_keypair(2048, "gs_rsa2048");
 
     std::cout << "\n[PROVISIONING COMPLETATO CON SUCCESSO]\n";
     std::cout << "Nota: Copiare i file .pub e psk.key sul Raspberry Pi (Boa).\n";

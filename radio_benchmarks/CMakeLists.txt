@@ -71,4 +71,4 @@ target_link_libraries(ground_station PRIVATE radio_telemetry_lib)
 
 # Tool di generazione chiavi offline di provisioning
 add_executable(generate_keys tools/generate_keys.cpp)
-target_link_libraries(generate_keys PRIVATE ${SODIUM_LIB} ${OPTIONAL_LIBS})
+target_link_libraries(generate_keys PRIVATE ${SODIUM_LIB} OpenSSL::Crypto ${OPTIONAL_LIBS})

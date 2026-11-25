@@ -30,8 +30,17 @@ enum class CryptoAlgorithm : uint8_t {
     ASCON_128        = 1,
     AES_256_GCM      = 2,
     CHACHA20_SODIUM  = 3, // ChaCha20-Poly1305 (Libsodium)
-    CHACHA20_OPENSSL = 4  // ChaCha20-Poly1305 (OpenSSL)
+    CHACHA20_OPENSSL = 4, // ChaCha20-Poly1305 (OpenSSL)
+    RSA_1024_E3      = 5, // RSA-1024 OAEP-SHA256 (e=3, solo confronto uplink)
+    RSA_2048_E3      = 6  // RSA-2048 OAEP-SHA256 (e=3, solo confronto uplink)
 };
+
+inline bool is_aead_algorithm(CryptoAlgorithm algo) {
+    return algo == CryptoAlgorithm::ASCON_128 ||
+           algo == CryptoAlgorithm::AES_256_GCM ||
+           algo == CryptoAlgorithm::CHACHA20_SODIUM ||
+           algo == CryptoAlgorithm::CHACHA20_OPENSSL;
+}
 
 enum class KemAlgorithm : uint8_t {
     X25519      = 1,

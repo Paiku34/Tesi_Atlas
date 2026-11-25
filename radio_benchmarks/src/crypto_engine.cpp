@@ -1,9 +1,12 @@
 #include "crypto_engine.hpp"
 
 #include <cstring>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
 #include <openssl/rand.h>
 #include <openssl/kdf.h>
 #include <sodium.h>
@@ -51,6 +54,22 @@ static bool read_binary_vector(const std::string& path, std::vector<uint8_t>& ou
     return read_binary_file(path, out.data(), expected_len);
 }
 
+static EVP_PKEY* load_rsa_pub(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return nullptr;
+    EVP_PKEY* pkey = PEM_read_PUBKEY(f, nullptr, nullptr, nullptr);
+    std::fclose(f);
+    return pkey;
+}
+
+static EVP_PKEY* load_rsa_sec(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return nullptr;
+    EVP_PKEY* pkey = PEM_read_PrivateKey(f, nullptr, nullptr, nullptr);
+    std::fclose(f);
+    return pkey;
+}
+
 CryptoEngine::CryptoEngine() {
     if (sodium_init() < 0) {
         std::cerr << "[CryptoEngine] Fallimento sodium_init()\n";
@@ -70,6 +89,10 @@ CryptoEngine::~CryptoEngine() {
     if (!gs_mlkem512_sk_.empty()) sodium_memzero(gs_mlkem512_sk_.data(), gs_mlkem512_sk_.size());
     if (!gs_mlkem768_sk_.empty()) sodium_memzero(gs_mlkem768_sk_.data(), gs_mlkem768_sk_.size());
     if (!gs_mlkem1024_sk_.empty()) sodium_memzero(gs_mlkem1024_sk_.data(), gs_mlkem1024_sk_.size());
+    if (gs_rsa1024_pk_) EVP_PKEY_free(gs_rsa1024_pk_);
+    if (gs_rsa1024_sk_) EVP_PKEY_free(gs_rsa1024_sk_);
+    if (gs_rsa2048_pk_) EVP_PKEY_free(gs_rsa2048_pk_);
+    if (gs_rsa2048_sk_) EVP_PKEY_free(gs_rsa2048_sk_);
 }
 
 bool CryptoEngine::load_provisioning(const std::string& prov_dir, bool is_ground_station) {
@@ -115,6 +138,20 @@ bool CryptoEngine::load_provisioning(const std::string& prov_dir, bool is_ground
     load_kem(OQS_KEM_alg_ml_kem_768, "gs_mlkem768", gs_mlkem768_pk_, gs_mlkem768_sk_);
     load_kem(OQS_KEM_alg_ml_kem_1024, "gs_mlkem1024", gs_mlkem1024_pk_, gs_mlkem1024_sk_);
 #endif
+
+    // 3. Carica chiavi statiche GS RSA (1024 e 2048 bit, e=3)
+    gs_rsa1024_pk_ = load_rsa_pub(prov_dir + "/gs_rsa1024.pub");
+    gs_rsa2048_pk_ = load_rsa_pub(prov_dir + "/gs_rsa2048.pub");
+    if (!gs_rsa1024_pk_ || !gs_rsa2048_pk_) {
+        std::cerr << "[CryptoEngine] [WARN] Chiavi pubbliche RSA non trovate in '" << prov_dir << "'\n";
+    }
+    if (is_gs_) {
+        gs_rsa1024_sk_ = load_rsa_sec(prov_dir + "/gs_rsa1024.sec");
+        gs_rsa2048_sk_ = load_rsa_sec(prov_dir + "/gs_rsa2048.sec");
+        if (!gs_rsa1024_sk_ || !gs_rsa2048_sk_) {
+            std::cerr << "[CryptoEngine] [WARN] Chiavi private RSA non trovate in '" << prov_dir << "'\n";
+        }
+    }
 
     std::cout << "[CryptoEngine] Provisioning caricato da '" << prov_dir
               << "' (Ruolo: " << (is_gs_ ? "Ground Station" : "Boa") << ")\n";
@@ -258,6 +295,28 @@ bool CryptoEngine::encrypt(CryptoAlgorithm algo,
         return ok;
     }
 
+    if (algo == CryptoAlgorithm::RSA_1024_E3 || algo == CryptoAlgorithm::RSA_2048_E3) {
+        EVP_PKEY* pk = (algo == CryptoAlgorithm::RSA_1024_E3) ? gs_rsa1024_pk_ : gs_rsa2048_pk_;
+        if (!pk) return false;
+
+        std::memset(out_tag, 0, AEAD_TAG_LEN);
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(pk, nullptr);
+        if (!ctx) return false;
+
+        size_t outlen = 0;
+        bool ok = (EVP_PKEY_encrypt_init(ctx) == 1 &&
+                   EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) == 1 &&
+                   EVP_PKEY_CTX_set_rsa_oaep_md(ctx, EVP_sha256()) == 1 &&
+                   EVP_PKEY_encrypt(ctx, nullptr, &outlen, plaintext, pt_len) == 1);
+        if (ok) {
+            out_ciphertext.resize(outlen);
+            ok = (EVP_PKEY_encrypt(ctx, out_ciphertext.data(), &outlen, plaintext, pt_len) == 1);
+            if (ok) out_ciphertext.resize(outlen);
+        }
+        EVP_PKEY_CTX_free(ctx);
+        return ok;
+    }
+
     return false;
 }
 
@@ -350,6 +409,28 @@ bool CryptoEngine::decrypt(CryptoAlgorithm algo,
             ok = false;
         }
         EVP_CIPHER_CTX_free(ctx);
+        return ok;
+    }
+
+    if (algo == CryptoAlgorithm::RSA_1024_E3 || algo == CryptoAlgorithm::RSA_2048_E3) {
+        if (!is_gs_) return false;
+        EVP_PKEY* sk = (algo == CryptoAlgorithm::RSA_1024_E3) ? gs_rsa1024_sk_ : gs_rsa2048_sk_;
+        if (!sk) return false;
+
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(sk, nullptr);
+        if (!ctx) return false;
+
+        size_t outlen = 0;
+        bool ok = (EVP_PKEY_decrypt_init(ctx) == 1 &&
+                   EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) == 1 &&
+                   EVP_PKEY_CTX_set_rsa_oaep_md(ctx, EVP_sha256()) == 1 &&
+                   EVP_PKEY_decrypt(ctx, nullptr, &outlen, ciphertext, ct_len) == 1);
+        if (ok) {
+            out_plaintext.resize(outlen);
+            ok = (EVP_PKEY_decrypt(ctx, out_plaintext.data(), &outlen, ciphertext, ct_len) == 1);
+            if (ok) out_plaintext.resize(outlen);
+        }
+        EVP_PKEY_CTX_free(ctx);
         return ok;
     }
 
