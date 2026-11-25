@@ -13,11 +13,34 @@
 #include <cstring>
 #include <sodium.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#define MKDIR(d) _mkdir(d)
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#define MKDIR(d) mkdir(d, 0777)
+#endif
+
 #ifdef __linux__
 #include <sys/resource.h>
 #endif
 
 using namespace radio;
+
+static void ensure_directory_exists(const std::string& path) {
+    if (path.empty()) return;
+    std::string current;
+    for (char c : path) {
+        if (c == '/' || c == '\\') {
+            if (!current.empty()) {
+                MKDIR(current.c_str());
+            }
+        }
+        current += c;
+    }
+    MKDIR(path.c_str());
+}
 
 struct TelemetryResult {
     std::string algo_name;
@@ -196,16 +219,13 @@ void run_kem_handshake_test(SerialPort& serial,
                 continue;
             }
 
-            // Step 3: Incapsulamento KEM e derivazione chiavi di sessione (HKDF)
+            // Step 3: Incapsulamento KEM
             std::vector<uint8_t> ciphertext;
             std::vector<uint8_t> shared_secret;
             if (!crypto.kem_encapsulate(algo, ciphertext, shared_secret)) {
                 std::cerr << "  [ERR] KEM encapsulate fallito per " << kem_name << "\n";
                 break;
             }
-
-            const char* label = (algo == KemAlgorithm::X25519) ? HKDF_LABEL_ECDH : HKDF_LABEL_MLKEM;
-            crypto.derive_session_keys(label, shared_secret.data(), shared_secret.size());
 
             // Genera Nonce Boa (32B) e calcola MAC PSK sulla risposta
             uint8_t buoy_nonce[HANDSHAKE_NONCE_BYTES];
@@ -244,6 +264,9 @@ void run_kem_handshake_test(SerialPort& serial,
             int to_ms = adaptive_timeout_ms(frame.size(), 2000);
             if (wait_for_ack(serial, 0, to_ms, dummy_rtt, t_tx, false)) {
                 ack_ok = true;
+                // FIX: Aggiorna le session keys SOLO quando l'handshake e confermato dall'ACK della GS
+                const char* label = (algo == KemAlgorithm::X25519) ? HKDF_LABEL_ECDH : HKDF_LABEL_MLKEM;
+                crypto.derive_session_keys(label, shared_secret.data(), shared_secret.size());
                 break;
             }
             if (r < max_retries) {
@@ -280,6 +303,9 @@ int main(int argc, char* argv[]) {
     std::string csv_out = data_dir + "/radio_telemetry_results.csv";
     std::string kem_csv_out = data_dir + "/radio_kem_results.csv";
 
+    // Crea automaticamente la directory data se non esiste
+    ensure_directory_exists(data_dir);
+
     std::cout << "========================================================\n";
     std::cout << "  ZENO ATLAS - BOA TELEMETRY NODE (Raspberry Pi)\n";
     std::cout << "  Device: " << device << " (" << baudrate << " baud)\n";
@@ -308,16 +334,20 @@ int main(int argc, char* argv[]) {
     const int PACKETS_PER_RUN = 100;
     const int HANDSHAKES_PER_RUN = 50;
 
-    // Sincronizzazione iniziale con la Ground Station (max 5 tentativi)
-    std::cout << "[SYNC] In attesa di aggancio con la Ground Station...\n";
-    for (int i = 0; i < 5; ++i) {
+    // Sincronizzazione iniziale con la Ground Station (ritenta finche la GS non risponde)
+    std::cout << "[SYNC] In attesa di aggancio con la Ground Station (avvia ground_station su Zeno)...\n";
+    bool synced = false;
+    while (!synced) {
         uint8_t start_sig = MAGIC_START;
         serial.write_exact(&start_sig, 1);
         double dummy = 0.0;
-        if (wait_for_ack(serial, 0, 500, dummy, std::chrono::steady_clock::now(), false)) {
-            std::cout << "[SYNC] Ground Station agganciata.\n";
+        if (wait_for_ack(serial, 0, 1000, dummy, std::chrono::steady_clock::now(), false)) {
+            std::cout << "[SYNC] Ground Station agganciata con successo! Inizio test...\n";
+            synced = true;
             break;
         }
+        std::cout << "  ... Ground Station non ancora pronta, ritento tra 1s ...\n";
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
     // 1. KEM Handshake Suite
@@ -349,31 +379,42 @@ int main(int argc, char* argv[]) {
     }
 
     // Esportazione CSV Telemetria (solo metriche di rete / E2E)
+    ensure_directory_exists(data_dir);
     {
         std::ofstream out(csv_out);
-        out << "Algorithm,Payload_B,E2E_Latency_ms,Success,Frame_B,Overhead_pct,Goodput_bps,Retries\n";
-        for (const auto& r : results) {
-            out << r.algo_name << "," << r.payload_bytes << ","
-                << (r.ack_received ? std::to_string(r.e2e_latency_ms) : "TIMEOUT") << ","
-                << (r.ack_received ? 1 : 0) << ","
-                << r.frame_bytes << ","
-                << std::setprecision(2) << r.overhead_pct << ","
-                << std::setprecision(1) << r.goodput_bps << ","
-                << r.retries << "\n";
+        if (!out) {
+            std::cerr << "[ERRORE FATALE] Impossibile creare il file CSV telemetria: " << csv_out << "\n";
+        } else {
+            out << "Algorithm,Payload_B,E2E_Latency_ms,Success,Frame_B,Overhead_pct,Goodput_bps,Retries\n";
+            for (const auto& r : results) {
+                out << r.algo_name << "," << r.payload_bytes << ","
+                    << (r.ack_received ? std::to_string(r.e2e_latency_ms) : "TIMEOUT") << ","
+                    << (r.ack_received ? 1 : 0) << ","
+                    << r.frame_bytes << ","
+                    << std::setprecision(2) << r.overhead_pct << ","
+                    << std::setprecision(1) << r.goodput_bps << ","
+                    << r.retries << "\n";
+            }
+            std::cout << "[OK] Salvato CSV telemetria in: " << csv_out << "\n";
         }
     }
 
     // Esportazione CSV KEM (lato boa: esito, dimensioni e retries; latenza E2E registrata su GS)
     if (!kem_results.empty()) {
         std::ofstream out(kem_csv_out);
-        out << "KEM_Algorithm,Success,Ciphertext_B,SharedSecret_B,Total_Handshake_B,Retries\n";
-        for (const auto& r : kem_results) {
-            out << r.kem_name << ","
-                << (r.ack_received ? 1 : 0) << ","
-                << r.ciphertext_bytes << ","
-                << r.shared_secret_bytes << ","
-                << r.total_handshake_bytes << ","
-                << r.retries << "\n";
+        if (!out) {
+            std::cerr << "[ERRORE FATALE] Impossibile creare il file CSV KEM: " << kem_csv_out << "\n";
+        } else {
+            out << "KEM_Algorithm,Success,Ciphertext_B,SharedSecret_B,Total_Handshake_B,Retries\n";
+            for (const auto& r : kem_results) {
+                out << r.kem_name << ","
+                    << (r.ack_received ? 1 : 0) << ","
+                    << r.ciphertext_bytes << ","
+                    << r.shared_secret_bytes << ","
+                    << r.total_handshake_bytes << ","
+                    << r.retries << "\n";
+            }
+            std::cout << "[OK] Salvato CSV KEM in: " << kem_csv_out << "\n";
         }
     }
 

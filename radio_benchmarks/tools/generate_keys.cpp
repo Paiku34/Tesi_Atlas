@@ -1,5 +1,6 @@
 #include <iostream>
 #include <fstream>
+#include <vector>
 #include <sodium.h>
 
 #if __has_include(<oqs/oqs.h>)

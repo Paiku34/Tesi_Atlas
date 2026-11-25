@@ -12,7 +12,30 @@
 #include <cstring>
 #include <sodium.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#define MKDIR(d) _mkdir(d)
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#define MKDIR(d) mkdir(d, 0777)
+#endif
+
 using namespace radio;
+
+static void ensure_directory_exists(const std::string& path) {
+    if (path.empty()) return;
+    std::string current;
+    for (char c : path) {
+        if (c == '/' || c == '\\') {
+            if (!current.empty()) {
+                MKDIR(current.c_str());
+            }
+        }
+        current += c;
+    }
+    MKDIR(path.c_str());
+}
 
 constexpr size_t MAX_VALID_PACKET_LEN = 4096;
 
@@ -60,11 +83,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    ensure_directory_exists(data_dir);
+
     std::ofstream csv(csv_out);
-    csv << "Timestamp_epoch_ms,Type,Id,Payload_B,Status\n";
+    if (!csv) {
+        std::cerr << "[ERRORE] Impossibile creare file CSV: " << csv_out << "\n";
+    } else {
+        csv << "Timestamp_epoch_ms,Type,Id,Payload_B,Status\n";
+    }
 
     std::ofstream kem_csv(kem_csv_out);
-    kem_csv << "Timestamp_epoch_ms,KEM_Id,Attempt,E2E_Handshake_ms,Success,Ciphertext_B,Retries,Status\n";
+    if (!kem_csv) {
+        std::cerr << "[ERRORE] Impossibile creare file CSV: " << kem_csv_out << "\n";
+    } else {
+        kem_csv << "Timestamp_epoch_ms,KEM_Id,Attempt,E2E_Handshake_ms,Success,Ciphertext_B,Retries,Status\n";
+    }
 
     uint32_t last_seen_seq = 0;
     size_t total_telemetry = 0;
@@ -231,6 +264,9 @@ int main(int argc, char* argv[]) {
             if (!ok) {
                 auth_failures++;
                 ack.status_code = 0x02; // Auth Fail
+                std::cout << "[AUTH_FAIL Telemetria] Rx Seq " << header.seq_num
+                          << " | Algo: " << static_cast<int>(header.algo_id)
+                          << " | Tag di autenticazione non valido!\n";
                 csv << now_ms << ",TELEMETRY," << header.seq_num << "," << header.len << ",AUTH_FAIL\n";
             } else {
                 last_seen_seq = header.seq_num;
