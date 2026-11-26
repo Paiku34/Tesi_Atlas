@@ -71,22 +71,24 @@ struct AckPacket {
 
 // -----------------------------------------------------------------------
 // 3. Handshake KEM - Step 1: Challenge GS (Downlink)
-// Dimensione totale fissa: 1B (Magic) + 1B (KemID) + 32B (Nonce GS) + 16B (Tag PSK) = 50 Byte
+// Dimensione totale fissa: 1B (Magic) + 1B (KemID) + 2B (hs_index) + 32B (Nonce GS) + 16B (Tag PSK) = 52 Byte
 // -----------------------------------------------------------------------
 struct KemChallengeHeader {
     uint8_t  magic;                               // 0x43 ('C')
     uint8_t  kem_id;                              // KemAlgorithm
+    uint16_t hs_index;                            // Indice progressivo tentativo (0..49)
     uint8_t  gs_nonce[HANDSHAKE_NONCE_BYTES];     // 32 Byte
-    uint8_t  auth_tag[PSK_TAG_BYTES];             // 16 Byte MAC calcolato su (kem_id + gs_nonce) con PSK
+    uint8_t  auth_tag[PSK_TAG_BYTES];             // 16 Byte MAC calcolato su (kem_id + hs_index + gs_nonce) con PSK
 };
 
 // -----------------------------------------------------------------------
 // 4. Handshake KEM - Step 2: Response Boa (Uplink)
-// Contiene: Magic (1B) + KemID (1B) + ct_len (2B) + buoy_nonce (32B) + Ciphertext (NB) + auth_tag (16B)
+// Contiene: Magic (1B) + KemID (1B) + hs_index (2B) + ct_len (2B) + buoy_nonce (32B) + Ciphertext (NB) + auth_tag (16B)
 // -----------------------------------------------------------------------
 struct KemResponseHeader {
     uint8_t  magic;                               // 0x4B ('K')
     uint8_t  kem_id;                              // KemAlgorithm
+    uint16_t hs_index;                            // Indice progressivo tentativo (0..49)
     uint16_t ct_len;                              // Lunghezza ciphertext KEM
     uint8_t  buoy_nonce[HANDSHAKE_NONCE_BYTES];   // 32 Byte
     // Segue Ciphertext[ct_len]

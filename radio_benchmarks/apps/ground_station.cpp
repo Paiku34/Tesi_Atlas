@@ -127,13 +127,16 @@ int main(int argc, char* argv[]) {
 
         randombytes_buf(current_gs_nonce, sizeof(current_gs_nonce));
 
-        uint8_t challenge_data[1 + HANDSHAKE_NONCE_BYTES];
+        uint16_t hs_idx = static_cast<uint16_t>(current_kem_attempt);
+        uint8_t challenge_data[1 + sizeof(uint16_t) + HANDSHAKE_NONCE_BYTES];
         challenge_data[0] = current_kem_id;
-        std::memcpy(challenge_data + 1, current_gs_nonce, HANDSHAKE_NONCE_BYTES);
+        std::memcpy(challenge_data + 1, &hs_idx, sizeof(uint16_t));
+        std::memcpy(challenge_data + 1 + sizeof(uint16_t), current_gs_nonce, HANDSHAKE_NONCE_BYTES);
 
         KemChallengeHeader chlng_hdr;
         chlng_hdr.magic = MAGIC_KEM_CHLNG;
         chlng_hdr.kem_id = current_kem_id;
+        chlng_hdr.hs_index = hs_idx;
         std::memcpy(chlng_hdr.gs_nonce, current_gs_nonce, HANDSHAKE_NONCE_BYTES);
         crypto.compute_psk_mac(challenge_data, sizeof(challenge_data), chlng_hdr.auth_tag);
 
@@ -287,13 +290,12 @@ int main(int argc, char* argv[]) {
             resp_hdr.magic = magic;
 
             if (!serial.read_exact(reinterpret_cast<uint8_t*>(&resp_hdr) + 1, sizeof(KemResponseHeader) - 1, 200) ||
-                resp_hdr.ct_len > MAX_VALID_PACKET_LEN) {
+                resp_hdr.ct_len > MAX_VALID_PACKET_LEN ||
+                resp_hdr.kem_id != current_kem_id ||
+                resp_hdr.hs_index != static_cast<uint16_t>(current_kem_attempt)) {
                 corrupted_frames++;
                 csv << now_ms << ",KEM," << static_cast<int>(current_kem_id) << ",0,CORRUPTED_TRUNCATED\n";
                 serial.flush();
-                if (kem_campaign_active && waiting_kem_response) {
-                    handle_kem_failure_or_retry(now_ms, 0, "CORRUPTED_TRUNCATED");
-                }
                 continue;
             }
 
@@ -324,7 +326,7 @@ int main(int argc, char* argv[]) {
             bool psk_valid = crypto.verify_psk_mac(auth_input.data(), auth_input.size(), response_tag);
             if (!psk_valid) {
                 auth_failures++;
-                AckPacket ack{MAGIC_ACK, 0, 0x02};
+                AckPacket ack{MAGIC_ACK, static_cast<uint32_t>(resp_hdr.hs_index), 0x02};
                 serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
                 csv << now_ms << ",KEM," << static_cast<int>(resp_hdr.kem_id) << "," << ciphertext.size() << ",PSK_AUTH_FAIL\n";
                 if (kem_campaign_active && waiting_kem_response) {
@@ -347,7 +349,7 @@ int main(int argc, char* argv[]) {
                 std::chrono::steady_clock::now() - t_hs_attempt_start).count();
 
             // Step 3: L'ACK parte solo dopo aver completato anche l'HKDF
-            AckPacket ack{MAGIC_ACK, 0, static_cast<uint8_t>(ok ? 0x00 : 0x02)};
+            AckPacket ack{MAGIC_ACK, static_cast<uint32_t>(resp_hdr.hs_index), static_cast<uint8_t>(ok ? 0x00 : 0x02)};
             serial.write_exact(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
 
             if (ok) {

@@ -84,6 +84,8 @@ static bool wait_for_ack(SerialPort& serial, uint32_t expected_seq, int timeout_
                         std::chrono::steady_clock::now() - t_start).count();
                     return true;
                 }
+            } else {
+                serial.flush();
             }
         }
     }
@@ -189,14 +191,17 @@ void run_kem_handshake_test(SerialPort& serial,
 
             auto t_wait_chlng = std::chrono::steady_clock::now();
             while (std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - t_wait_chlng).count() < 3500) {
+                       std::chrono::steady_clock::now() - t_wait_chlng).count() < 5500) {
                 if (serial.read_byte(magic, 100) && magic == MAGIC_KEM_CHLNG) {
                     chlng.magic = magic;
                     if (serial.read_exact(reinterpret_cast<uint8_t*>(&chlng) + 1, sizeof(KemChallengeHeader) - 1, 500)) {
-                        if (chlng.kem_id == static_cast<uint8_t>(algo)) {
+                        if (chlng.kem_id == static_cast<uint8_t>(algo) &&
+                            chlng.hs_index == static_cast<uint16_t>(h)) {
                             got_challenge = true;
                             break;
                         }
+                    } else {
+                        serial.flush();
                     }
                 }
             }
@@ -209,12 +214,14 @@ void run_kem_handshake_test(SerialPort& serial,
             }
 
             // Step 2: Verifica autenticità della Challenge GS tramite PSK
-            uint8_t challenge_data[1 + HANDSHAKE_NONCE_BYTES];
+            uint8_t challenge_data[1 + sizeof(uint16_t) + HANDSHAKE_NONCE_BYTES];
             challenge_data[0] = chlng.kem_id;
-            std::memcpy(challenge_data + 1, chlng.gs_nonce, HANDSHAKE_NONCE_BYTES);
+            std::memcpy(challenge_data + 1, &chlng.hs_index, sizeof(uint16_t));
+            std::memcpy(challenge_data + 1 + sizeof(uint16_t), chlng.gs_nonce, HANDSHAKE_NONCE_BYTES);
 
             if (!crypto.verify_psk_mac(challenge_data, sizeof(challenge_data), chlng.auth_tag)) {
                 std::cerr << "  [AUTH_FAIL] Challenge GS non valida (MAC PSK errato)!\n";
+                serial.flush();
                 if (r < max_retries) retries_used++;
                 continue;
             }
@@ -244,6 +251,7 @@ void run_kem_handshake_test(SerialPort& serial,
             KemResponseHeader resp_hdr;
             resp_hdr.magic = MAGIC_KEM_RESP;
             resp_hdr.kem_id = static_cast<uint8_t>(algo);
+            resp_hdr.hs_index = static_cast<uint16_t>(h);
             resp_hdr.ct_len = static_cast<uint16_t>(ciphertext.size());
             std::memcpy(resp_hdr.buoy_nonce, buoy_nonce, HANDSHAKE_NONCE_BYTES);
 
@@ -254,21 +262,22 @@ void run_kem_handshake_test(SerialPort& serial,
 
             ct_bytes = ciphertext.size();
             ss_bytes = shared_secret.size();
-            total_hs_bytes = sizeof(KemChallengeHeader) + frame.size(); // Challenge (50B) + Response
+            total_hs_bytes = sizeof(KemChallengeHeader) + frame.size(); // Challenge (52B) + Response
 
             auto t_tx = std::chrono::steady_clock::now();
             serial.write_exact(frame.data(), frame.size());
 
             // Step 5: Attendi ACK finale dalla GS
             double dummy_rtt = 0.0;
-            int to_ms = adaptive_timeout_ms(frame.size(), 2000);
-            if (wait_for_ack(serial, 0, to_ms, dummy_rtt, t_tx, false)) {
+            int to_ms = adaptive_timeout_ms(frame.size(), 3500);
+            if (wait_for_ack(serial, static_cast<uint32_t>(h), to_ms, dummy_rtt, t_tx, true)) {
                 ack_ok = true;
                 // FIX: Aggiorna le session keys SOLO quando l'handshake e confermato dall'ACK della GS
                 const char* label = (algo == KemAlgorithm::X25519) ? HKDF_LABEL_ECDH : HKDF_LABEL_MLKEM;
                 crypto.derive_session_keys(label, shared_secret.data(), shared_secret.size());
                 break;
             }
+            serial.flush();
             if (r < max_retries) {
                 retries_used++;
             }
